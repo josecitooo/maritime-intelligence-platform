@@ -1,0 +1,42 @@
+# ── Secrets — never commit ────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Python ────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ── Node / frontend ───────────────────────────────────────────────────
+node_modules/
+dist/
+.vite/
+*.local
+
+# ── Data & raw captures (sanitized fixtures ARE committed) ────────────
+historical/
+.captures/
+*.parquet
+
+# ── Logs ──────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Editor / OS ───────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

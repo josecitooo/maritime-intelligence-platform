@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+    contents: read
+
+jobs:
+  backend:
+    name: backend lint + tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: maritime_test
+          POSTGRES_PASSWORD: maritime_test
+          POSTGRES_DB: maritime_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U maritime_test -d maritime_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      ENVIRONMENT: test
+      LOG_FORMAT: json
+      DATABASE_URL: postgresql+psycopg://maritime_test:maritime_test@localhost:5432/maritime_test
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Tests
+        run: pytest
