@@ -1,0 +1,26 @@
+# Development / demo stack.
+#
+# FASE 1 boots only the API. The ingestion `worker` service joins in FASE 2
+# together with `app/worker.py`, so `docker compose up` stays green at every
+# phase boundary. Postgres is intentionally NOT here: Supabase is the
+# operational database — see docker-compose.test.yml for the local test DB.
+
+name: maritime-intelligence-platform
+
+services:
+  api:
+    build:
+      context: ./backend
+    image: maritime-backend:dev
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ENVIRONMENT: development
+      LOG_FORMAT: pretty
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped

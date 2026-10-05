@@ -1,0 +1,25 @@
+# Ephemeral PostGIS used by integration tests.
+#
+#   docker compose -f docker-compose.test.yml up -d --wait
+#   cd backend && pytest
+#   docker compose -f docker-compose.test.yml down -v
+#
+# Port 5433 avoids colliding with any local Supabase/Postgres instance.
+
+name: maritime-intelligence-platform-tests
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: maritime_test
+      POSTGRES_PASSWORD: maritime_test
+      POSTGRES_DB: maritime_test
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maritime_test -d maritime_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
