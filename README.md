@@ -35,7 +35,7 @@ and turned into metrics. Existing dashboards show *positions*; they rarely show
                       │            INGESTION WORKER (asyncio)         │
    wss://stream.      │                                                │
    aisstream.io ──────┤► stream_consumer ─► buffer (per-vessel throttle)│
-   bbox = Caribe      │         │                                     │
+   bbox = Golfo/Caribe│         │                                     │
                       │         ▼ every 30 min (flush)                 │
                       │   validate ► transform ► dedup ► insert        │
                       │         ├─► vessels · vessel_positions         │
@@ -124,7 +124,7 @@ Full template in [`.env.example`](.env.example). Never commit `.env`.
 | Variable | Default | Purpose |
 |---|---|---|
 | `AISSTREAM_API_KEY` | — | Stream credential (required in production) |
-| `MIN_LAT` / `MAX_LAT` / `MIN_LON` / `MAX_LON` | `8.0` / `18.2` / `-72.0` / `-59.0` | Caribbean bounding box |
+| `MIN_LAT` / `MAX_LAT` / `MIN_LON` / `MAX_LON` | `8.0` / `31.0` / `-98.0` / `-59.0` | Gulf + Caribbean bounding box |
 | `DATABASE_URL` | local Postgres | Supabase direct connection, `sslmode=require` |
 | `RETENTION_DAYS` | `7` | Operational window before export + delete |
 | `INGESTION_INTERVAL_MINUTES` | `30` | Flush cadence = "updated every N minutes" |

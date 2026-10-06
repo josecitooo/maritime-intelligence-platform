@@ -108,15 +108,21 @@ the client.
 | Region | Frames | Unique vessels | Rate |
 |---|---|---|---|
 | Caribbean (`8.0..18.2`, `-72.0..-59.0`) | 24 | 22 | 0.4/s |
-| Gulf + Caribbean (`8.0..31.0`, `-98.0..-59.0`) | 355 | 344 | 5.9/s |
+| **Gulf + Caribbean (`8.0..31.0`, `-98.0..-59.0`)** | **355** | **344** | **5.9/s** |
 | US East + Caribbean (`8.0..42.0`, `-82.0..-59.0`) | 507 | 484 | 8.5/s |
 | NW Europe (`48.0..51.5`, `-6.0..8.0`) | 871 | 790 | 14.5/s |
 
 Aishub-style networks are terrestrial: coverage follows coastlines where
 receivers are deployed. The Caribbean basin itself is thinly covered, while
-the Gulf of Mexico and the US seaboard are dense. This is why the bounding
-box is a **product decision**, not a technical one — see
-`app.config.bbox`.
+the Gulf of Mexico and the US seaboard are dense.
+
+**The configured box is the second row.** It was chosen for two reasons: 15×
+the vessel density of the basin alone, and it still contains the Dominican
+Republic and the whole Caribbean. Widening to the third row was rejected — it
+adds volume and shifts attention away from the region the product is about,
+for a demo gain that is not worth it. The trade is recorded in
+`app.config.bbox` and `.env.example` so the next reader sees *why*, not just
+what.
 
 ---
 

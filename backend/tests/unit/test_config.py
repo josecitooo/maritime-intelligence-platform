@@ -29,9 +29,10 @@ def test_env_file_falls_back_when_nothing_is_found(tmp_path):
     assert find_env_file(cwd=tmp_path, package_file=isolated_package) == Path(".env")
 
 
-def test_defaults_match_the_caribbean_design():
+def test_defaults_match_the_gulf_and_caribbean_design():
+    """Bbox chosen from measured coverage, not preference (docs/ingestion.md §2)."""
     settings = make()
-    assert settings.bbox == (8.0, 18.2, -72.0, -59.0)
+    assert settings.bbox == (8.0, 31.0, -98.0, -59.0)
     assert settings.retention_days == 7
     assert settings.ingestion_interval_minutes == 30
     assert settings.position_interval_minutes == 10
@@ -132,9 +133,10 @@ def test_retention_must_be_at_least_one_day():
 
 
 def test_bbox_geometry_helpers():
+    """Gulf + Caribbean: lat 8..31 (23°), lon -98..-59 (39°)."""
     settings = make()
-    assert settings.bbox_area_deg2 == pytest.approx(10.2 * 13.0)
-    assert settings.bbox_center == pytest.approx((13.1, -65.5))
+    assert settings.bbox_area_deg2 == pytest.approx(23.0 * 39.0)
+    assert settings.bbox_center == pytest.approx((19.5, -78.5))
 
 
 def test_read_key_opt_in():

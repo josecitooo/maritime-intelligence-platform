@@ -61,10 +61,14 @@ class Settings(BaseSettings):
     aisstream_endpoint: str = "wss://stream.aisstream.io/v0/stream"
     message_types: str = _DEFAULT_MESSAGE_TYPES
 
-    # ── Region (bounding box) — default: Caribbean ─────────────────────
+    # ── Region (bounding box) — default: Gulf + Caribbean ──────────────
+    # Chosen by measurement, not taste: the Caribbean basin alone is thinly
+    # covered (0.4 msg/s, 89 vessels/10 min) while extending north to the US
+    # seaboard raises it to 5.9 msg/s with the same subscription. See
+    # docs/ingestion.md §2.
     min_lat: float = Field(default=8.0, ge=-90.0, le=90.0)
-    max_lat: float = Field(default=18.2, ge=-90.0, le=90.0)
-    min_lon: float = Field(default=-72.0, ge=-180.0, le=180.0)
+    max_lat: float = Field(default=31.0, ge=-90.0, le=90.0)
+    min_lon: float = Field(default=-98.0, ge=-180.0, le=180.0)
     max_lon: float = Field(default=-59.0, ge=-180.0, le=180.0)
 
     # ── Database ───────────────────────────────────────────────────────

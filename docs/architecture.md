@@ -76,9 +76,12 @@ window. The buffer is capped (`BUFFER_MAX_MESSAGES`) so memory is bounded.
 | **10 min** | **144** | **2.0 M** | **~150 MB ✓** |
 | 30 min | 48 | 672 k | ~50 MB ✓ |
 
-A Caribbean bbox fits comfortably in the Supabase free tier at the default; a
-European bbox requires raising the interval. This is documented in
-`.env.example` so it is discovered before it hurts.
+The bounding box sets which vessels get counted. The default
+`Gulf + Caribbean` box measures 344 distinct vessels per minute
+(`docs/ingestion.md` §2), so the "2 000 vessels" column is the right order
+of magnitude rather than a guess. The actual concurrent fleet is measured at
+the first flush in FASE 4 — until then this table is the planning model, and
+`POSITION_INTERVAL_MINUTES` is the single lever if growth runs high.
 
 ---
 
@@ -135,8 +138,8 @@ PostGIS expresses it once and correctly.
 archived. Deletion is guarded by a successful `export_runs` row for the period.
 
 Deletes run in chunks so a large purge does not hold locks against reads.
-Partitioning is deliberately **not** used: 7 days of throttled Caribbean data
-does not justify it. Revisit above roughly 10 M rows.
+Partitioning is deliberately **not** used: 7 days of throttled `Gulf +
+Caribbean` data does not justify it. Revisit above roughly 10 M rows.
 
 ---
 
