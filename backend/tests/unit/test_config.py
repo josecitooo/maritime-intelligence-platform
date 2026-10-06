@@ -100,6 +100,16 @@ def test_message_types_are_trimmed_and_split():
     assert settings.subscribed_message_types == ("PositionReport", "ShipStaticData")
 
 
+def test_default_subscription_covers_class_a_class_b_and_static_data():
+    """Class B carried 25% of frames in the Caribbean probe — it is not optional."""
+    assert make().subscribed_message_types == (
+        "PositionReport",
+        "StandardClassBPositionReport",
+        "ExtendedClassBPositionReport",
+        "ShipStaticData",
+    )
+
+
 def test_message_types_cannot_be_empty():
     settings = make(message_types=" , ")
     with pytest.raises(ValueError, match="at least one"):
