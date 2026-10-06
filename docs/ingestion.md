@@ -272,6 +272,12 @@ Everything below was read off real frames in `.captures/`, not off the
 documentation. Names differ from AISHub's, so downstream mapping must not be
 guessed.
 
+**Units arrive already converted.** The wire's AIS encoding is decimetres for
+draught and tenths of a knot for speed; aisstream hands over metres and
+knots (`MaximumStaticDraught = 13.9` on a 293 m container ship, `Sog = 9.0`
+in a region where 90 kn would be impossible). Dividing by ten again would
+report a 1.4 m draught on a Panamax — checked, not assumed.
+
 `MetaData` (present on every message type):
 
 | Field | Notes |
@@ -299,7 +305,7 @@ guessed.
 | `Name`, `CallSign` | blank-padded strings |
 | `ImoNumber` | **not `IMO`**; `0` means unknown → `NULL` |
 | `Type` | **not `ShipType`**; numeric AIS ship-type code, `0` = unavailable |
-| `Dimension` | **nested** `{A, B, C, D}` in metres — `length = A + B`, `width = C + D` |
+| `Dimension` | **nested** `{A, B, C, D}` in metres — `length = A + B`, `width = C + D`. A side of **`0` is meaningful** (antenna at that edge), so only an all-zero block means "no size" |
 | `MaximumStaticDraught` | metres |
 | `Destination` | blank-padded; blank → `NULL` |
 | `Eta` | nested `{Month, Day, Hour, Minute}` — **no year field exists** |
@@ -322,7 +328,7 @@ Dimension               455/470
 | `ReportA.Name` / `ReportA.Valid` | part A carries *only* the name |
 | `ReportB.ShipType` | **not `Type`**, as on type 5; `0` = unavailable → `NULL` |
 | `ReportB.CallSign` | blank-padded |
-| `ReportB.Dimension` | same nested `{A,B,C,D}`; all-zero → `NULL` |
+| `ReportB.Dimension` | same nested `{A,B,C,D}`; a zero side is kept, all-zero → `NULL` |
 | `ReportB.Valid` | `false` = the frame carries nothing usable → **ignore it**, do not merge |
 
 This type was not in the original subscription. `ShipStaticData` (type 5) is

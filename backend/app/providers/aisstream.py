@@ -93,6 +93,28 @@ def _positive_float(value: object) -> float | None:
     return parsed if parsed is not None and parsed > 0 else None
 
 
+def _dimensions(raw: object) -> dict[str, int | None]:
+    """Decode AIS's four hull offsets — not a length.
+
+    The wire reports `A` (bow→antenna), `B` (antenna→stern), `C` (port→
+    centreline) and `D` (centreline→starboard); `length = A + B` and
+    `width = C + D` are derived from them. A side of **0 is meaningful**: it
+    means the antenna sits exactly at that edge, so zeroing it out would make
+    the length underivable. Only an all-zero block means the vessel reports no
+    dimensions at all.
+
+    Measured across 52 dimension blocks: 49 with no zero side, one with
+    `B = 0` and three real sides, two entirely zero.
+    """
+    sides = ("A", "B", "C", "D")
+    if not isinstance(raw, dict):
+        return dict.fromkeys(sides)
+    values = {side: _as_int(raw.get(side)) for side in sides}
+    if all(value in (None, 0) for value in values.values()):
+        return dict.fromkeys(sides)
+    return values
+
+
 def parse_time_utc(value: object) -> datetime | None:
     """Parse aisstream's Go timestamp: ``2026-10-06 03:43:10.928591872 +0000 UTC``.
 
@@ -200,8 +222,7 @@ def _decode_position(
 def _decode_ship_static(
     payload: dict, *, source: str, received_at: datetime, mmsi: int
 ) -> StaticSample:
-    dimension = payload.get("Dimension")
-    dimension = dimension if isinstance(dimension, dict) else {}
+    dimension = _dimensions(payload.get("Dimension"))
     return StaticSample(
         mmsi=mmsi,
         source=source,
@@ -210,10 +231,10 @@ def _decode_ship_static(
         callsign=_blank(payload.get("CallSign")),
         imo=_positive_int(payload.get("ImoNumber")),
         ship_type=_positive_int(payload.get("Type")),
-        dim_a=_positive_int(dimension.get("A")),
-        dim_b=_positive_int(dimension.get("B")),
-        dim_c=_positive_int(dimension.get("C")),
-        dim_d=_positive_int(dimension.get("D")),
+        dim_a=dimension["A"],
+        dim_b=dimension["B"],
+        dim_c=dimension["C"],
+        dim_d=dimension["D"],
         draught=_positive_float(payload.get("MaximumStaticDraught")),
         destination=_blank(payload.get("Destination")),
         eta=format_eta(payload.get("Eta")),
@@ -242,18 +263,17 @@ def _decode_class_b_static(
             mmsi=mmsi, source=source, received_at=received_at, name=name
         )
 
-    dimension = report.get("Dimension")
-    dimension = dimension if isinstance(dimension, dict) else {}
+    dimension = _dimensions(report.get("Dimension"))
     return StaticSample(
         mmsi=mmsi,
         source=source,
         received_at=received_at,
         callsign=_blank(report.get("CallSign")),
         ship_type=_positive_int(report.get("ShipType")),
-        dim_a=_positive_int(dimension.get("A")),
-        dim_b=_positive_int(dimension.get("B")),
-        dim_c=_positive_int(dimension.get("C")),
-        dim_d=_positive_int(dimension.get("D")),
+        dim_a=dimension["A"],
+        dim_b=dimension["B"],
+        dim_c=dimension["C"],
+        dim_d=dimension["D"],
     )
 
 

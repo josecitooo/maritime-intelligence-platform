@@ -181,8 +181,10 @@ def test_ship_static_data_maps_identity_without_fabricating_zeros(probe_frames):
             assert sample.draught == payload["MaximumStaticDraught"]
 
         dimension = payload["Dimension"]
-        for side, attribute in (("A", "dim_a"), ("B", "dim_b"), ("C", "dim_c"), ("D", "dim_d")):
-            expected = dimension[side] if dimension[side] > 0 else None
+        attributes = (("A", "dim_a"), ("B", "dim_b"), ("C", "dim_c"), ("D", "dim_d"))
+        all_zero = all(dimension[side] == 0 for side, _ in attributes)
+        for side, attribute in attributes:
+            expected = None if all_zero else dimension[side]
             assert getattr(sample, attribute) == expected
 
 
@@ -245,6 +247,61 @@ def test_zero_and_blank_identity_fields_become_none():
     assert sample.destination is None
     assert sample.dim_a is None and sample.dim_d is None
     assert sample.eta is None
+
+
+def test_a_zero_hull_side_is_kept_so_the_length_stays_derivable():
+    """A side of 0 means the antenna sits at that edge, not "no data".
+
+    The wire reports offsets, not a length: `length = A + B`. Discarding a
+    zero side would make the sum underivable — a real capture carries exactly
+    this shape (``{A: 12, B: 0, C: 1, D: 3}``).
+    """
+    envelope = {
+        "MessageType": "ShipStaticData",
+        "MetaData": {"MMSI": 355693000, "time_utc": "2026-10-06 03:43:10 +0000 UTC"},
+        "Message": {
+            "ShipStaticData": {
+                "UserID": 355693000,
+                "Name": "SMALL CRAFT        ",
+                "CallSign": "XY1234",
+                "ImoNumber": 0,
+                "Type": 37,
+                "Dimension": {"A": 12, "B": 0, "C": 1, "D": 3},
+                "MaximumStaticDraught": 1.5,
+                "Destination": "PORT                ",
+                "Eta": {"Month": 0, "Day": 0, "Hour": 0, "Minute": 0},
+            }
+        },
+    }
+    sample = decode(json.dumps(envelope))
+    assert isinstance(sample, StaticSample)
+    assert (sample.dim_a, sample.dim_b, sample.dim_c, sample.dim_d) == (12, 0, 1, 3)
+    # What the product shows, derived rather than read off the wire.
+    assert sample.dim_a + sample.dim_b == 12
+    assert sample.dim_c + sample.dim_d == 4
+
+
+def test_an_all_zero_dimension_block_means_the_vessel_reports_no_size():
+    envelope = {
+        "MessageType": "ShipStaticData",
+        "MetaData": {"MMSI": 355693000, "time_utc": "2026-10-06 03:43:10 +0000 UTC"},
+        "Message": {
+            "ShipStaticData": {
+                "UserID": 355693000,
+                "Name": "UNSIZED             ",
+                "CallSign": "",
+                "ImoNumber": 0,
+                "Type": 37,
+                "Dimension": {"A": 0, "B": 0, "C": 0, "D": 0},
+                "MaximumStaticDraught": 0.0,
+                "Destination": "                   ",
+                "Eta": {"Month": 0, "Day": 0, "Hour": 0, "Minute": 0},
+            }
+        },
+    }
+    sample = decode(json.dumps(envelope))
+    assert isinstance(sample, StaticSample)
+    assert all(getattr(sample, f"dim_{side.lower()}") is None for side in "ABCD")
 
 
 def test_malformed_frames_raise_rather_than_silently_disappear():
