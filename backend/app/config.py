@@ -15,7 +15,8 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_MESSAGE_TYPES = (
-    "PositionReport,StandardClassBPositionReport,ExtendedClassBPositionReport,ShipStaticData"
+    "PositionReport,StandardClassBPositionReport,ExtendedClassBPositionReport,"
+    "ShipStaticData,StaticDataReport"
 )
 _DEFAULT_CORS = ["http://localhost:5173"]
 

@@ -102,12 +102,17 @@ def test_message_types_are_trimmed_and_split():
 
 
 def test_default_subscription_covers_class_a_class_b_and_static_data():
-    """Class B carried 25% of frames in the Caribbean probe — it is not optional."""
+    """Class B carried 37.8% of frames, so it is not optional.
+
+    `StaticDataReport` (AIS type 24) is what gives Class B vessels a ship type
+    and dimensions — `ShipStaticData` (type 5) is only ever sent by Class A.
+    """
     assert make().subscribed_message_types == (
         "PositionReport",
         "StandardClassBPositionReport",
         "ExtendedClassBPositionReport",
         "ShipStaticData",
+        "StaticDataReport",
     )
 
 

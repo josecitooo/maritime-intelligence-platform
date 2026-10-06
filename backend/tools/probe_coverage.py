@@ -52,7 +52,7 @@ POSITION_TYPES = {
     "LongRangeAisBroadcastMessage",
 }
 CLASS_B_TYPES = {"StandardClassBPositionReport", "ExtendedClassBPositionReport"}
-STATIC_TYPES = {"ShipStaticData"}
+STATIC_TYPES = {"ShipStaticData", "StaticDataReport"}
 
 # Field names verified against a live capture — aisstream nests dimensions
 # under `Dimension`, and names the type/IMO fields `Type` and `ImoNumber`.
@@ -341,7 +341,10 @@ def write_fixtures(frames: list[str], args: argparse.Namespace) -> tuple[Path | 
 
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
     path = FIXTURE_DIR / "probe_sample.jsonl"
-    path.write_text("\n".join(selected) + "\n", encoding="utf-8")
+    # `newline="\n"` keeps the committed blob byte-identical on every platform;
+    # relying on git's text normalisation instead would make the fixture's
+    # bytes a property of the developer's `core.autocrlf`.
+    path.write_text("\n".join(selected) + "\n", encoding="utf-8", newline="\n")
 
     meta = {
         "source": "aisstream.io live capture",
@@ -353,7 +356,7 @@ def write_fixtures(frames: list[str], args: argparse.Namespace) -> tuple[Path | 
         "note": "AIS position data is broadcast publicly by vessels.",
     }
     (FIXTURE_DIR / "probe_sample.meta.json").write_text(
-        json.dumps(meta, indent=2) + "\n", encoding="utf-8"
+        json.dumps(meta, indent=2) + "\n", encoding="utf-8", newline="\n"
     )
     return path, len(selected)
 
