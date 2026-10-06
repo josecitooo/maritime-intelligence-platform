@@ -25,8 +25,15 @@ from typing import ClassVar, Protocol, runtime_checkable
 class PositionSample:
     """One decoded position report, normalised but not yet validated.
 
+    Only fields a **position** message actually carries live here. Voyage
+    data (`draught`, `destination`, `eta`) belongs to `StaticSample` — AIS
+    message types 1/2/3/18/19 never report it, so putting it here would
+    guarantee a permanently-NULL column.
+
     `None` means "the source did not report this value" — which is different
-    from "the value is zero". Nothing here is invented downstream.
+    from "the value is zero". Nothing here is invented downstream. Wire
+    sentinels (COG 360, heading 511, SOG 102.3, ROT -128) are already
+    decoded to `None`; see `docs/ingestion.md` §9.
     """
 
     mmsi: int
@@ -40,9 +47,6 @@ class PositionSample:
     heading: int | None = None
     rot: int | None = None
     nav_status: int | None = None
-    draught: float | None = None
-    destination: str | None = None
-    eta: str | None = None
     ship_name: str | None = None
 
 
@@ -75,9 +79,26 @@ class AISProvider(Protocol):
 
     Implementations must reconnect internally and yield forever; callers
     should never have to manage the transport.
+
+    The counters are part of the contract because the worker reports them
+    when it closes a window — that is how an operator tells "quiet sea" from
+    "broken stream". They are cumulative for the process lifetime and are
+    never reset by the caller.
     """
 
     name: ClassVar[str]
+
+    frames: int
+    """Frames read off the wire, including ones that do not decode."""
+
+    decode_errors: int
+    """Frames that were not usable JSON/payload and were dropped."""
+
+    unmodelled: int
+    """Frames of a type this pipeline does not model."""
+
+    reconnects: int
+    """Times the transport had to be re-established after a drop."""
 
     def samples(self) -> AsyncIterator[Sample]:
         """Yield decoded samples indefinitely, reconnecting as needed."""
