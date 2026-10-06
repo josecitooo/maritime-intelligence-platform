@@ -282,7 +282,10 @@ async def run_probe(args: argparse.Namespace) -> int:
 
     # ── Persist ────────────────────────────────────────────────────────
     capture_path = write_capture(frames, started)
-    fixture_path, fixture_count = write_fixtures(frames, args)
+    if args.no_fixtures:
+        fixture_path, fixture_count = None, 0
+    else:
+        fixture_path, fixture_count = write_fixtures(frames, args)
 
     report = build_report(
         settings=settings,
@@ -434,6 +437,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--min-vessels", type=int, default=5, help="unique vessels required to pass")
     parser.add_argument("--fixture-positions", type=int, default=200, help="position frames to keep")
     parser.add_argument("--fixture-static", type=int, default=50, help="static frames to keep")
+    parser.add_argument(
+        "--no-fixtures",
+        action="store_true",
+        help="skip writing tests/fixtures/ — use for short re-runs so the "
+        "canonical fixture is not replaced by a weaker capture",
+    )
     return parser.parse_args(argv)
 
 
