@@ -253,11 +253,17 @@ def _decode_class_b_static(
     part_b = bool(payload.get("PartNumber"))
     report = payload.get("ReportB" if part_b else "ReportA")
     if not isinstance(report, dict) or not report.get("Valid"):
+        log.debug(
+            "class B static report declares itself unusable",
+            extra={"mmsi": mmsi, "part": "B" if part_b else "A"},
+        )
         return None
 
     if not part_b:
         name = _blank(report.get("Name"))
         if name is None:
+            # Part A carries nothing else, so a nameless part A is an empty frame.
+            log.debug("class B part A arrived without a name", extra={"mmsi": mmsi})
             return None
         return StaticSample(
             mmsi=mmsi, source=source, received_at=received_at, name=name
@@ -282,12 +288,14 @@ def decode_frame(
 ) -> Sample | None:
     """Decode one stream frame into a sample.
 
-    Returns `None` for frames that carry nothing we model (including
-    `SubscriptionConfirmation` and message types outside the subscription).
+    Returns `None` — logging the reason at DEBUG — for a frame that carries
+    nothing usable: a message type outside the decode set, an AIS type 24
+    part B declaring `Valid: false`, or a part A with no name. The caller
+    counts those as `unusable`.
 
-    Raises `ValueError` when the frame is well-formed JSON but unusable — a
-    malformed frame must not kill the stream, so the caller counts it and
-    carries on.
+    Raises `ValueError` when the frame is well-formed JSON but broken — a
+    malformed frame must not kill the stream, so the caller counts it as a
+    `decode_error` and carries on.
     """
     text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
     try:
@@ -299,6 +307,7 @@ def decode_frame(
 
     message_type = envelope.get("MessageType")
     if message_type not in _POSITION_TYPES and message_type not in _STATIC_TYPES:
+        log.debug("frame carries no modelled message type", extra={"message_type": message_type})
         return None
 
     message = envelope.get("Message")
@@ -357,7 +366,7 @@ class AISStreamProvider:
         self._connect = connect if connect is not None else websockets.connect
         self.frames = 0
         self.decode_errors = 0
-        self.unmodelled = 0
+        self.unusable = 0
         self.reconnects = 0
 
     # AISProvider ---------------------------------------------------------
@@ -420,7 +429,7 @@ class AISStreamProvider:
                     log.debug("skipping undecodable frame", extra={"reason": str(exc)})
                     continue
                 if sample is None:
-                    self.unmodelled += 1
+                    self.unusable += 1
                     continue
                 yield sample
 

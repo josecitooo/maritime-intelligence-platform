@@ -28,7 +28,7 @@ class FakeProvider:
         self._error = error
         self.frames = 0
         self.decode_errors = 0
-        self.unmodelled = 0
+        self.unusable = 0
         self.reconnects = 0
 
     async def samples(self):

@@ -94,8 +94,14 @@ class AISProvider(Protocol):
     decode_errors: int
     """Frames that were not usable JSON/payload and were dropped."""
 
-    unmodelled: int
-    """Frames of a type this pipeline does not model."""
+    unusable: int
+    """Frames read cleanly that carried nothing we can use.
+
+    Three causes, all measured: a message type outside the decode set (only
+    reachable by adding one to `MESSAGE_TYPES` that the adapter does not
+    know), an AIS type 24 part B with `Valid: false`, and a part A whose only
+    payload — the name — is blank. Each logs its reason at DEBUG.
+    """
 
     reconnects: int
     """Times the transport had to be re-established after a drop."""

@@ -173,7 +173,7 @@ class IngestionWorker:
                 "evicted": batch.evicted,
                 "frames": stats.frames,
                 "decode_errors": stats.decode_errors,
-                "unmodelled": stats.unmodelled,
+                "unusable": stats.unusable,
                 "reconnects": stats.reconnects,
                 "gap_seconds": round(gap_seconds, 1) if gap_seconds is not None else None,
             },

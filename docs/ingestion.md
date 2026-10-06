@@ -247,7 +247,8 @@ create duplicates.
 | Connection refused / handshake fails | logged, exponential backoff with jitter, cap 5 min, retry forever |
 | Subscription rejected | hard error, exit — an invalid key must not retry silently |
 | Socket closes mid-stream | logged with reason, reconnect and resubscribe within 3 s |
-| Malformed frame | counted as `invalid_json`, skipped, does not abort the window |
+| Malformed frame | counted as `decode_errors`, logged at DEBUG, does not abort the window |
+| Well-formed frame with nothing usable | counted as `unusable` and logged at DEBUG with its reason — a message type outside the decode set, an AIS type 24 part B with `Valid: false`, or a nameless part A. Not an error: the frame was readable, it simply had nothing for us |
 | Database unavailable at flush | window stays buffered and is retried; `ingestion_runs` records the failure — the batch is never lost silently |
 
 `/health` exposes `last_flush`, `last_ais_message` and `data_freshness_minutes`
