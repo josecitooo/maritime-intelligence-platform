@@ -2,15 +2,31 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
-from app.config import Settings
+from app.config import Settings, find_env_file
 
 
 def make(**overrides) -> Settings:
     """Settings built without reading a developer's `.env`."""
     return Settings(_env_file=None, **overrides)
+
+
+def test_env_file_is_found_walking_up_from_the_working_directory(tmp_path):
+    """`backend/` is the CWD but `.env` lives at the repository root."""
+    (tmp_path / ".env").write_text("RETENTION_DAYS=7\n", encoding="utf-8")
+    nested = tmp_path / "backend" / "tools"
+    nested.mkdir(parents=True)
+
+    assert find_env_file(cwd=nested) == tmp_path / ".env"
+
+
+def test_env_file_falls_back_when_nothing_is_found(tmp_path):
+    isolated_package = tmp_path / "app" / "config.py"
+    assert find_env_file(cwd=tmp_path, package_file=isolated_package) == Path(".env")
 
 
 def test_defaults_match_the_caribbean_design():

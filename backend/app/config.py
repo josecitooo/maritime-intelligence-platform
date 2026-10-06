@@ -18,6 +18,22 @@ _DEFAULT_MESSAGE_TYPES = "PositionReport,ShipStaticData"
 _DEFAULT_CORS = ["http://localhost:5173"]
 
 
+def find_env_file(cwd: Path | None = None, package_file: Path | None = None) -> Path:
+    """Locate `.env`, walking up from the current directory and from this file.
+
+    The secret file lives at the repository root, but `pytest`, `uvicorn` and
+    `tools/*` are all invoked from `backend/`. Resolving `.env` relative to the
+    process CWD alone would silently miss it.
+    """
+    starts = [cwd or Path.cwd(), (package_file or Path(__file__)).resolve()]
+    for start in starts:
+        for directory in (start, *start.parents):
+            candidate = directory / ".env"
+            if candidate.is_file():
+                return candidate
+    return Path(".env")
+
+
 class Settings(BaseSettings):
     """Validated runtime settings.
 
@@ -27,7 +43,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=find_env_file(),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
