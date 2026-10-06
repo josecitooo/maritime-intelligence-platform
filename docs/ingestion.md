@@ -124,6 +124,28 @@ for a demo gain that is not worth it. The trade is recorded in
 `app.config.bbox` and `.env.example` so the next reader sees *why*, not just
 what.
 
+### Result of the final configuration (600 s, Gulf + Caribbean, 5 types)
+
+The gate above used the original narrow box and four message types. The
+configuration actually shipped adds `StaticDataReport`, so it was re-run end
+to end rather than assumed equivalent:
+
+| Metric | Value |
+|---|---|
+| Frames captured | **4 283** |
+| Message rate | **7.1 msg/s** |
+| Unique vessels | **1 583** (1 422 positioned, 750 with identity) |
+| Identity coverage of positioned vessels | **52.7 %** |
+| Gaps > 15 s | **0** (longest 0.0 s) |
+| Parse errors | **0** |
+| Duplicate frames | 0 |
+
+Message mix: `PositionReport` 58.5 %, `StandardClassBPositionReport` 19.5 %,
+`StaticDataReport` 11.1 %, `ShipStaticData` 11.0 %.
+
+Verdict: **exit 0, usable**. Subscribing to AIS type 24 nearly doubled the
+share of vessels that carry identity — see §9.
+
 ---
 
 ## 3. The provider contract
@@ -155,9 +177,29 @@ frame ─► decode ─► throttle(mmsi, POSITION_INTERVAL_MINUTES) ─► buff
 
 * The consumer task never performs database I/O — aisstream drops messages if
   reading stalls, so decoding must stay non-blocking.
+* The throttle is **continuous, not per window**: its per-vessel map survives
+  a flush. Clearing it when the buffer drains would accept each vessel's first
+  message after every flush no matter how recent the previous one was, giving
+  two points closer together than `POSITION_INTERVAL_MINUTES` and pushing the
+  row count past the 144/vessel/day model (`architecture.md` §4). Entries for
+  vessels silent for twice the interval are pruned so the map cannot grow
+  without bound as ships leave the region.
 * The buffer is capped by `BUFFER_MAX_MESSAGES`; overflow evicts oldest with a
   logged warning rather than exhausting memory.
 * Static data is buffered separately and upserted into `vessels`.
+
+### Live run, before persistence existed (2026-06-10, 150 s)
+
+| | |
+|---|---|
+| frames decoded | 1 028 — **0** decode errors, **0** unmodelled, **0** reconnects |
+| positions accepted per 30 s window | 145, 158, 150, 107, 105 |
+| throttled per window | 1, 5, 34, 49, 54 |
+
+The rising `throttled` column is the rate limit carrying across flushes. The
+same run against a buffer that reset it per window reported `1, 4, 4, 1, 2`
+and accepted 856 rows instead of 665 — identical traffic, 22 % more rows, all
+of the extra ones inside one promised interval.
 
 ---
 
@@ -168,9 +210,22 @@ Data is never discarded for being incomplete.
 | Class | Examples | Action |
 |---|---|---|
 | **invalid** | latitude outside ±90, longitude outside ±180, MMSI not 9 digits | rejected, counted |
-| **missing** | empty `DEST`, `IMO = 0`, draught `0` | stored as `NULL` |
-| **unknown** | `NAVSTAT = 15`, `TrueHeading = 511`, `COG = 360` | stored, surfaced as `UNKNOWN` |
+| **missing** | field absent from the message (Class B reports no `NAVSTAT`) | stored as `NULL` |
+| **unknown** | the source explicitly reported "no value" | see below |
 | **anomalous** | SOG > 60 kn, position jump > 50 km between samples | **stored**, flagged |
+
+**`unknown` splits on whether the sentinel fits the column.** Only
+`NAVSTAT = 15` ("not defined") is a real state code, so it is **stored as
+`15`** and the API surfaces it as `UNKNOWN`. Everything else in this class
+encodes "not available" with a value *outside* the field's valid domain —
+`COG = 360`, `TrueHeading = 511`, `SOG = 102.3`, `ROT = -128`,
+`IMO = 0`, `Type = 0`, draught `0`, empty `DEST` — and storing those would
+corrupt aggregates (`AVG(cog)` dragged toward 360), so they are **`NULL`**.
+
+That conversion happens in the adapter at **decode** time, not at flush:
+`None` is what the sample dataclasses already mean, so the wire's spelling of
+"nothing" is normalised before anything downstream can mistake it for data.
+The classes above are what remains for validation to judge.
 
 Rejected counts are aggregated by reason into `ingestion_runs.rejected` as
 JSONB; full detail goes to structured logs.
@@ -249,18 +304,42 @@ guessed.
 | `Destination` | blank-padded; blank → `NULL` |
 | `Eta` | nested `{Month, Day, Hour, Minute}` — **no year field exists** |
 
-Presence measured across the 26 static frames of the 600 s run:
+Presence measured across the **470** `ShipStaticData` frames of the
+final-configuration run:
 
 ```
-Name                    26          ImoNumber               25
-CallSign                26          Destination             25
-Type                    26          MaximumStaticDraught    24
-Dimension               26
+Name                    470/470     ImoNumber               327/470
+CallSign                459/470     Destination             433/470
+Type                    462/470     MaximumStaticDraught    419/470
+Dimension               455/470
 ```
+
+`StaticDataReport` (AIS type 24 — Class B identity):
+
+| Field | Notes |
+|---|---|
+| `PartNumber` | `false` = part A, `true` = part B — **mutually exclusive frames** |
+| `ReportA.Name` / `ReportA.Valid` | part A carries *only* the name |
+| `ReportB.ShipType` | **not `Type`**, as on type 5; `0` = unavailable → `NULL` |
+| `ReportB.CallSign` | blank-padded |
+| `ReportB.Dimension` | same nested `{A,B,C,D}`; all-zero → `NULL` |
+| `ReportB.Valid` | `false` = the frame carries nothing usable → **ignore it**, do not merge |
+
+This type was not in the original subscription. `ShipStaticData` (type 5) is
+only ever sent by Class A, so without type 24 every Class B vessel would be
+unnamed and untyped — and Class B is 19.5 % of the stream. The run above
+showed 474 type-24 frames against 470 type-5, and identity coverage of
+positioned vessels rise from **24.7 % to 52.7 %** once it was added. Measured
+across a 120 s sample, part B (the half carrying type and dimensions) arrived
+in 16 of 96 frames, `Valid` in all 16, with a non-zero `ShipType` in 16 and
+non-zero dimensions in 14.
 
 Consequences for the product:
 
 * **Ship type and dimensions are available** — they may be shown.
+* **Class B identity arrives in two halves that never coexist**, so `vessels`
+  must be upserted null-preserving (`app.ingestion.buffer.merge_static`): a
+  part-A frame knows no ship type and must not erase a known one.
 * **ETA has no year.** It can only be rendered as `Month/Day HH:MM` and must
   never be promoted to a date by inventing the year. V1 shows it as reported
   or does not show it.
