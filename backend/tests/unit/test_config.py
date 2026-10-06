@@ -43,10 +43,15 @@ def test_environment_defaults_to_development():
     assert Settings.model_fields["environment"].default == "development"
 
 
-def test_subscription_is_built_from_the_bounding_box():
+def test_subscription_uses_a_list_of_boxes_not_a_single_box():
+    """Regression: a flat `[[lat,lon],[lat,lon]]` is killed with close code 1006."""
     settings = make()
-    corners = settings.aisstream_bounding_box()
-    assert corners == [[18.2, -72.0], [8.0, -59.0]]
+    boxes = settings.aisstream_bounding_boxes()
+
+    assert len(boxes) == 1
+    corners = boxes[0]
+    assert len(corners) == 2
+    assert all(len(corner) == 2 for corner in corners)
 
     lats = [corner[0] for corner in corners]
     lons = [corner[1] for corner in corners]

@@ -54,6 +54,32 @@ POSITION_TYPES = {
 CLASS_B_TYPES = {"StandardClassBPositionReport", "ExtendedClassBPositionReport"}
 STATIC_TYPES = {"ShipStaticData"}
 
+# Field names verified against a live capture — aisstream nests dimensions
+# under `Dimension`, and names the type/IMO fields `Type` and `ImoNumber`.
+STATIC_SCALAR_FIELDS = (
+    "Name",
+    "CallSign",
+    "ImoNumber",
+    "Type",
+    "MaximumStaticDraught",
+)
+STATIC_DIMENSION_SIDES = ("A", "B", "C", "D")
+
+
+def static_fields_present(payload: dict) -> list[str]:
+    """Which ShipStaticData fields actually carry a value (0 / blank = absent)."""
+    present = [
+        field
+        for field in STATIC_SCALAR_FIELDS
+        if payload.get(field) not in (None, "", 0)
+    ]
+    if str(payload.get("Destination") or "").strip():
+        present.append("Destination")
+    dimension = payload.get("Dimension") or {}
+    if any(dimension.get(side) for side in STATIC_DIMENSION_SIDES):
+        present.append("Dimension")
+    return present
+
 # AIS Class B transmits more often than Class A when underway, so a short gap
 # is normal. Anything beyond this is a real hole in the feed.
 GAP_THRESHOLD_SECONDS = 15.0
@@ -98,9 +124,8 @@ class Probe:
 
         if message_type in STATIC_TYPES:
             payload = (envelope.get("Message") or {}).get("ShipStaticData") or {}
-            for field in ("Name", "CallSign", "IMO", "ShipType", "DimensionToBow", "Destination"):
-                if payload.get(field) not in (None, "", 0):
-                    self.static_field_presence[field] += 1
+            for field in static_fields_present(payload):
+                self.static_field_presence[field] += 1
 
     # ── Derived ────────────────────────────────────────────────────────
 
@@ -127,6 +152,72 @@ class Probe:
         return len(self.position_mmsi | self.static_mmsi)
 
 
+CONFIRMATION_TIMEOUT = 15.0
+
+
+def _decode(raw: str | bytes) -> str:
+    """aisstream sends **binary** frames containing UTF-8 JSON (documented).
+
+    Normalise to `str` once at the boundary so dedup, capture and reporting
+    never see a `bytes`.
+    """
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return raw
+
+
+def close_reason(socket, exc: Exception) -> str:
+    """Close code 1006 means the server dropped us without sending a close frame."""
+    return f"{type(exc).__name__} close_code={getattr(socket, 'close_code', None)}: {exc}"
+
+
+async def wait_for_confirmation(socket, timeout: float) -> tuple[dict | None, str | None]:
+    """Return `(confirmation, disconnect_reason)` for the initial handshake."""
+    try:
+        message = await asyncio.wait_for(socket.recv(), timeout=timeout)
+    except TimeoutError:
+        return None, None
+    except websockets.ConnectionClosed as exc:
+        return None, close_reason(socket, exc)
+
+    raw = _decode(message)
+    try:
+        envelope = json.loads(raw)
+    except json.JSONDecodeError:
+        raise ProbeError(f"First frame was not valid JSON: {raw[:200]!r}") from None
+
+    if envelope.get("MessageType") != "SubscriptionConfirmation":
+        raise ProbeError(
+            f"First frame was {envelope.get('MessageType')!r}, expected "
+            "SubscriptionConfirmation — check the API key and bounding box shape."
+        )
+    return envelope, None
+
+
+async def consume(socket, probe: Probe, frames: list[str], deadline: float) -> str | None:
+    """Read frames until `deadline`, returning a disconnect reason if any.
+
+    A single `asyncio.timeout` wraps the whole loop instead of cancelling each
+    `recv()`, so a frame can never be lost to cancellation.
+    """
+    try:
+        async with asyncio.timeout(max(deadline - time.monotonic(), 0.0)):
+            async for message in socket:
+                raw = _decode(message)
+                try:
+                    envelope = json.loads(raw)
+                except json.JSONDecodeError:
+                    probe.errors["invalid_json"] += 1
+                    continue
+                probe.record(raw, envelope, time.monotonic())
+                frames.append(raw)
+    except TimeoutError:
+        return None
+    except websockets.ConnectionClosed as exc:
+        return close_reason(socket, exc)
+    return None
+
+
 async def run_probe(args: argparse.Namespace) -> int:
     settings = get_settings()
 
@@ -136,11 +227,10 @@ async def run_probe(args: argparse.Namespace) -> int:
         print("  2. Get a free key at https://aisstream.io/account (GitHub login)", file=sys.stderr)
         return 2
 
-    bbox = settings.aisstream_bounding_box()
     message_types = list(settings.subscribed_message_types)
     subscription = {
         "APIKey": settings.aisstream_api_key,
-        "BoundingBoxes": bbox,
+        "BoundingBoxes": settings.aisstream_bounding_boxes(),
         "FilterMessageTypes": message_types,
     }
 
@@ -165,39 +255,14 @@ async def run_probe(args: argparse.Namespace) -> int:
             max_size=2**21,
         ) as socket:
             await socket.send(json.dumps(subscription))
-
             deadline = time.monotonic() + args.duration
-            while time.monotonic() < deadline:
-                remaining = deadline - time.monotonic()
-                try:
-                    raw = await asyncio.wait_for(socket.recv(), timeout=min(remaining, 30))
-                except TimeoutError:
-                    continue
-                except websockets.ConnectionClosed as exc:
-                    disconnected = f"{type(exc).__name__}: {exc}"
-                    break
 
-                try:
-                    envelope = json.loads(raw)
-                except json.JSONDecodeError:
-                    probe.errors["invalid_json"] += 1
-                    continue
-
-                if confirmation is None:
-                    confirmation = envelope
-                    if envelope.get("MessageType") != "SubscriptionConfirmation":
-                        raise ProbeError(
-                            f"First frame was {envelope.get('MessageType')!r}, "
-                            "expected SubscriptionConfirmation — check the API key."
-                        )
-                    print(f"  subscription  OK (compression="
-                          f"{bool((envelope.get('Message') or {}).get('CompressionEnabled'))})")
-                    print()
-                    continue
-
-                now = time.monotonic()
-                probe.record(raw, envelope, now)
-                frames.append(raw)
+            confirmation, disconnected = await wait_for_confirmation(socket, CONFIRMATION_TIMEOUT)
+            if confirmation is not None:
+                enabled = bool((confirmation.get("Message") or {}).get("CompressionEnabled"))
+                print(f"  subscription  OK (compression={enabled})")
+                print()
+                disconnected = await consume(socket, probe, frames, deadline)
 
     except ProbeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -205,12 +270,14 @@ async def run_probe(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"ERROR: could not reach the stream: {exc}", file=sys.stderr)
         return 2
-    except TimeoutError as exc:
-        print(f"ERROR: timed out waiting for a subscription confirmation: {exc}", file=sys.stderr)
-        return 2
 
     if confirmation is None:
-        print("ERROR: no subscription confirmation received within the window.", file=sys.stderr)
+        if disconnected:
+            print(f"ERROR: connection closed before any confirmation - {disconnected}",
+                  file=sys.stderr)
+        else:
+            print(f"ERROR: no subscription confirmation within {CONFIRMATION_TIMEOUT:.0f}s.",
+                  file=sys.stderr)
         return 2
 
     # ── Persist ────────────────────────────────────────────────────────
@@ -230,11 +297,11 @@ async def run_probe(args: argparse.Namespace) -> int:
     print(report)
 
     if probe.unique_vessels < args.min_vessels:
-        print(f"\nVERDICT: INSUFFICIENT — {probe.unique_vessels} vessels "
+        print(f"\nVERDICT: INSUFFICIENT - {probe.unique_vessels} vessels "
               f"< required {args.min_vessels}. Re-evaluate the source before FASE 3.")
         return 1
 
-    print(f"\nVERDICT: USABLE — {probe.unique_vessels} unique vessels observed.")
+    print(f"\nVERDICT: USABLE - {probe.unique_vessels} unique vessels observed.")
     return 0
 
 

@@ -138,9 +138,15 @@ class Settings(BaseSettings):
     def auth_required(self) -> bool:
         return bool(self.api_read_key)
 
-    def aisstream_bounding_box(self) -> list[list[float]]:
-        """Bounding box in aisstream.io corner format: `[[lat, lon], [lat, lon]]`."""
-        return [[self.max_lat, self.min_lon], [self.min_lat, self.max_lon]]
+    def aisstream_bounding_boxes(self) -> list[list[list[float]]]:
+        """Bounding boxes in aisstream.io shape: a **list of boxes**.
+
+        Format is ``[[[lat, lon], [lat, lon]], ...]``. Sending a single box as
+        ``[[lat, lon], [lat, lon]]`` makes the server drop the connection with
+        close code 1006 *before* sending any SubscriptionConfirmation — it
+        fails silently rather than reporting a schema error.
+        """
+        return [[[self.max_lat, self.min_lon], [self.min_lat, self.max_lon]]]
 
 
 @lru_cache(maxsize=1)
