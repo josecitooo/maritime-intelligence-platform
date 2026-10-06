@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.ingestion.buffer import WindowBatch
+from app.ingestion.pipeline import WindowResult
 from app.providers.aisstream import SubscriptionRejected
 from app.providers.base import PositionSample, Sample, StaticSample
 from app.worker import IngestionWorker
@@ -55,12 +55,12 @@ def static(mmsi: int, **fields) -> StaticSample:
     return StaticSample(mmsi=mmsi, source="fake", received_at=datetime.now(UTC), **fields)
 
 
-def make_worker(provider) -> tuple[IngestionWorker, list[tuple[WindowBatch, str]]]:
+def make_worker(provider) -> tuple[IngestionWorker, list[tuple[WindowResult, str]]]:
     worker = IngestionWorker(provider)
-    reported: list[tuple[WindowBatch, str]] = []
+    reported: list[tuple[WindowResult, str]] = []
 
-    async def spy(batch: WindowBatch, *, reason: str, gap_seconds: float | None) -> None:
-        reported.append((batch, reason))
+    async def spy(result: WindowResult, *, reason: str, gap_seconds: float | None) -> None:
+        reported.append((result, reason))
 
     worker._report = spy  # shadow the logger with an observable double
     return worker, reported
@@ -68,7 +68,12 @@ def make_worker(provider) -> tuple[IngestionWorker, list[tuple[WindowBatch, str]
 
 async def test_run_drains_the_provider_and_flushes_on_shutdown(app_settings):
     provider = FakeProvider(
-        [position(1), position(2), position(1), static(1, name="SEA BEE")]
+        [
+            position(355693001),
+            position(355693002),
+            position(355693001),
+            static(355693001, name="SEA BEE"),
+        ]
     )
     worker, reported = make_worker(provider)
 
@@ -78,22 +83,23 @@ async def test_run_drains_the_provider_and_flushes_on_shutdown(app_settings):
     assert len(worker.buffer) == 0
 
     assert len(reported) == 1
-    batch, reason = reported[0]
+    result, reason = reported[0]
     assert reason == "shutdown"
     # The second sample for vessel 1 is throttled away by the 10-minute rule.
-    assert len(batch.positions) == 2
-    assert batch.vessels == 2
-    assert batch.throttled == 1
-    assert [sample.mmsi for sample in batch.statics] == [1]
+    assert len(result.positions) == 2
+    assert result.vessels == 2
+    assert result.throttled == 1
+    assert result.rejected == {}
+    assert [sample.mmsi for sample in result.statics] == [355693001]
 
 
 async def test_an_empty_window_is_still_flushed(app_settings):
     """An empty flush is a query, and an idle Supabase project gets paused."""
     worker, reported = make_worker(FakeProvider())
 
-    batch = await worker.flush_once(reason="keepalive")
+    result = await worker.flush_once(reason="keepalive")
 
-    assert batch.positions == []
+    assert result.positions == []
     assert reported[0][1] == "keepalive"
     assert worker.last_flush is not None
 
@@ -101,8 +107,8 @@ async def test_an_empty_window_is_still_flushed(app_settings):
 async def test_a_failed_report_leaves_the_window_buffered(app_settings):
     """A database outage must cost latency, not data."""
     worker, _ = make_worker(FakeProvider())
-    worker.buffer.add_position(position(1))
-    worker.buffer.add_position(position(2))
+    worker.buffer.add_position(position(355693001))
+    worker.buffer.add_position(position(355693002))
 
     async def boom(*args, **kwargs):
         raise RuntimeError("database unavailable")
@@ -143,15 +149,15 @@ async def test_the_flush_loop_runs_on_the_configured_interval(app_settings):
 async def test_the_flush_loop_survives_a_failed_window(app_settings):
     """One bad window must not take the worker down, nor lose the window."""
     worker = IngestionWorker(FakeProvider())
-    worker.buffer.add_position(position(1))
+    worker.buffer.add_position(position(355693001))
     stop = asyncio.Event()
     attempts = 0
     seen: list[int] = []
 
-    async def flaky(batch, *, reason, gap_seconds):
+    async def flaky(result, *, reason, gap_seconds):
         nonlocal attempts
         attempts += 1
-        seen.append(len(batch.positions))
+        seen.append(len(result.positions))
         if attempts == 1:
             raise RuntimeError("database unavailable")
 
@@ -166,3 +172,25 @@ async def test_the_flush_loop_survives_a_failed_window(app_settings):
     # The first attempt still saw the position, so the failed window was kept
     # rather than drained before the write was known to have worked.
     assert seen[0] == 1
+
+
+async def test_validation_runs_before_the_seam_so_nothing_invalid_survives(app_settings):
+    """Rejection must happen before `_report`, or the bad row gets persisted."""
+    worker, reported = make_worker(FakeProvider())
+    worker.buffer.add_position(position(355693001))
+    worker.buffer.add_position(
+        PositionSample(
+            mmsi=355693002,
+            timestamp=datetime.now(UTC),
+            latitude=91.0,  # impossible, but present
+            longitude=-61.5,
+            source="fake",
+            received_at=datetime.now(UTC),
+        )
+    )
+
+    await worker.flush_once()
+
+    result, _ = reported[0]
+    assert [sample.mmsi for sample in result.positions] == [355693001]
+    assert result.rejected == {"latitude_out_of_range": 1}

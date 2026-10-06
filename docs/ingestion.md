@@ -188,18 +188,26 @@ frame ─► decode ─► throttle(mmsi, POSITION_INTERVAL_MINUTES) ─► buff
   logged warning rather than exhausting memory.
 * Static data is buffered separately and upserted into `vessels`.
 
-### Live run, before persistence existed (2026-06-10, 150 s)
+### Live run, before persistence existed (2026-10-06, 150 s)
 
 | | |
 |---|---|
-| frames decoded | 1 028 — **0** decode errors, **0** unmodelled, **0** reconnects |
-| positions accepted per 30 s window | 145, 158, 150, 107, 105 |
-| throttled per window | 1, 5, 34, 49, 54 |
+| frames decoded | 1 001 — **0** decode errors, **0** unusable, **0** reconnects |
+| positions accepted per 30 s window | 179, 124, 135, 114, 98 |
+| throttled per window | 1, 5, 42, 34, 41 |
+| rejected / flagged by validation | **0 / 0** |
 
-The rising `throttled` column is the rate limit carrying across flushes. The
-same run against a buffer that reset it per window reported `1, 4, 4, 1, 2`
+The rising `throttled` column is the rate limit carrying across flushes. An
+earlier run against a buffer that reset it per window reported `1, 4, 4, 1, 2`
 and accepted 856 rows instead of 665 — identical traffic, 22 % more rows, all
 of the extra ones inside one promised interval.
+
+Validation saw nothing to reject or flag in real traffic, which is the point:
+it was checked against synthetic impossible frames *and* against the sea. The
+only counter that ever moved was `unusable`, once in an earlier run — and the
+subscription was measured at 0 out-of-subscription frames in 1 260, so the
+name cannot be blamed on a configuration mismatch. Its reason is now logged
+at DEBUG (§7).
 
 ---
 
@@ -207,12 +215,12 @@ of the extra ones inside one promised interval.
 
 Data is never discarded for being incomplete.
 
-| Class | Examples | Action |
-|---|---|---|
-| **invalid** | latitude outside ±90, longitude outside ±180, MMSI not 9 digits | rejected, counted |
-| **missing** | field absent from the message (Class B reports no `NAVSTAT`) | stored as `NULL` |
-| **unknown** | the source explicitly reported "no value" | see below |
-| **anomalous** | SOG > 60 kn, position jump > 50 km between samples | **stored**, flagged |
+| Class | Examples | Action | Where |
+|---|---|---|---|
+| **invalid** | latitude outside ±90, longitude outside ±180, MMSI not 9 digits | rejected, counted | `ingestion.pipeline`, at flush |
+| **missing** | field absent from the message (Class B reports no `NAVSTAT`) | stored as `NULL` | adapter, at decode |
+| **unknown** | the source explicitly reported "no value" | see below | adapter, at decode |
+| **anomalous** | SOG > 60 kn | **stored**, flagged | `ingestion.pipeline`, at flush |
 
 **`unknown` splits on whether the sentinel fits the column.** Only
 `NAVSTAT = 15` ("not defined") is a real state code, so it is **stored as
@@ -227,8 +235,31 @@ That conversion happens in the adapter at **decode** time, not at flush:
 "nothing" is normalised before anything downstream can mistake it for data.
 The classes above are what remains for validation to judge.
 
+A rejection is absolute: the row never reaches the database. A flag marks data
+that is stored **in full** — an implausible speed is still evidence that a
+vessel was somewhere, and hiding it would discard the very data showing the
+sensor was wrong.
+
+### Two entries the original design listed, and why neither is here
+
+**Rejected for falling outside the bounding box** — dropped. aisstream
+filters on the same coordinates the payload carries, so all 200 captured
+positions were already inside; a check that cannot fire is dead code, and one
+that fired at the boundary would drop legitimate data for no gain. The
+subscription *is* the region filter, and it is configured by `MIN_LAT` …
+`MAX_LON` rather than re-checked downstream.
+
+**Position jump > 50 km between samples** — deferred to FASE 4, where the
+previous position comes from `vessel_positions`. Detecting it in memory would
+mean holding a second copy of "where this vessel was last"; it resets on every
+restart, so the same anomalous flight would be flagged or missed depending on
+when the process was last redeployed. A flag that lies sometimes is worse than
+no flag, and the stored row is the authoritative previous position anyway —
+reading it is a query the flush already makes.
+
 Rejected counts are aggregated by reason into `ingestion_runs.rejected` as
-JSONB; full detail goes to structured logs.
+JSONB, flags the same way in `ingestion_runs.flagged`; until FASE 4 both are
+in the structured logs. In the live run of §4 both were empty.
 
 ---
 

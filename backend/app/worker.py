@@ -20,7 +20,8 @@ import signal
 from datetime import UTC, datetime
 
 from app.config import Settings, get_settings
-from app.ingestion.buffer import SampleBuffer, WindowBatch
+from app.ingestion.buffer import SampleBuffer
+from app.ingestion.pipeline import WindowResult, process_window
 from app.logging import get_logger, setup_logging
 from app.providers.aisstream import AISStreamProvider, SubscriptionRejected
 from app.providers.base import AISProvider, PositionSample
@@ -97,21 +98,23 @@ class IngestionWorker:
         if failure is not None:
             raise failure
 
-    async def flush_once(self, *, reason: str = "scheduled") -> WindowBatch:
-        """Close the current window and report it.
+    async def flush_once(self, *, reason: str = "scheduled") -> WindowResult:
+        """Validate the window, report it, then drain it.
 
-        The window is drained only after reporting succeeds, so a failed
-        flush leaves the samples in place for the next attempt.
+        Reporting precedes the drain, so a failed flush leaves the samples in
+        place for the next attempt. `process_window` is pure, so a retry
+        recomputes the same verdict from the same input rather than judging a
+        window twice against different state.
         """
         started = datetime.now(UTC)
         gap_seconds = (
             (started - self.last_flush).total_seconds() if self.last_flush is not None else None
         )
-        batch = self.buffer.snapshot()
-        await self._report(batch, reason=reason, gap_seconds=gap_seconds)
-        drained = self.buffer.clear()
+        result = process_window(self.buffer.snapshot())
+        await self._report(result, reason=reason, gap_seconds=gap_seconds)
+        self.buffer.clear()
         self.last_flush = datetime.now(UTC)
-        return drained
+        return result
 
     # ── Tasks ──────────────────────────────────────────────────────────
 
@@ -153,24 +156,27 @@ class IngestionWorker:
     # ── Hooks ──────────────────────────────────────────────────────────
 
     async def _report(
-        self, batch: WindowBatch, *, reason: str, gap_seconds: float | None
+        self, result: WindowResult, *, reason: str, gap_seconds: float | None
     ) -> None:
-        """Log the window.
+        """Log the window's verdict.
 
         This is also the seam where the database write belongs: it must run
-        before the caller drains the buffer, so that a write failure leaves
-        the window intact for the next attempt.
+        before the caller drains the buffer, so a write failure leaves the
+        window intact for the next attempt. Validation has already run, so
+        rejected rows are gone before anything could persist them.
         """
         stats = self.provider
         log.info(
             "ingestion window closed",
             extra={
                 "reason": reason,
-                "positions": len(batch.positions),
-                "statics": len(batch.statics),
-                "vessels": batch.vessels,
-                "throttled": batch.throttled,
-                "evicted": batch.evicted,
+                "positions": len(result.positions),
+                "statics": len(result.statics),
+                "vessels": result.vessels,
+                "throttled": result.throttled,
+                "evicted": result.evicted,
+                "rejected": result.rejected,
+                "flagged": result.flagged,
                 "frames": stats.frames,
                 "decode_errors": stats.decode_errors,
                 "unusable": stats.unusable,
