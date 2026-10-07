@@ -1,13 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ApiError, apiBaseUrl, POSITIONS_LIMIT } from '../api/client'
-import type { HealthResponse, PositionLatest, Region } from '../api/types'
+import type { HealthResponse, PortCongestionSummary, PositionLatest, Region } from '../api/types'
+import { applyFilters, fleetSummary, NO_FILTER, portSummary, type FleetFilters } from '../lib/filters'
 import { formatAgo, formatCount, formatUtc } from '../lib/format'
 import { Globe } from './Globe'
 import type { GlobeFocus } from './Globe'
+import { FilterBar } from './FilterBar'
 import { InspectPanel } from './InspectPanel'
+import { KpiBar } from './KpiBar'
+import { PortPanel } from './PortPanel'
 import { RegionBar } from './RegionBar'
 import { SearchBox } from './SearchBox'
 import { useToggleRegions } from '../hooks/useRegions'
+import { usePortDetail } from '../hooks/usePorts'
+import { useSyncTrack, useVesselTrack } from '../hooks/useTrack'
 
 interface DataStageProps {
   health: HealthResponse | undefined
@@ -15,39 +21,65 @@ interface DataStageProps {
   isPending: boolean
   error: unknown
   regions: Region[] | undefined
-}
-
-const matches = (row: PositionLatest, query: string): boolean => {
-  const needle = query.toLowerCase()
-  if (row.ship_name?.toLowerCase().includes(needle)) return true
-  return String(row.mmsi).includes(needle)
+  /** Every port's reading; each drives a marker and the port-side KPI. */
+  ports: PortCongestionSummary[] | undefined
 }
 
 /**
- * The stage: the world (region selection, fleet, search, inspection) and the
- * few states that come before it.
+ * The stage: the world (region selection, fleet, search, inspection, ports)
+ * and the few states that come before it.
  *
  * Three reading states, in the order they can happen: a first read pending,
  * no answer, or the world itself. Once the API has answered, the world is
  * always up — with zero vessels it is a correct answer about an empty
  * database, not a reason to hide the geography the operator asked about. The
- * selection, the search and the inspection panel are this component's state,
- * because they exist only in relation to what is on stage.
+ * selection, the search, the filters, the track and the port panel are this
+ * component's state, because they exist only in relation to what is on stage.
  */
-export function DataStage({ health, rows, isPending, error, regions }: DataStageProps) {
+export function DataStage({ health, rows, isPending, error, regions, ports }: DataStageProps) {
   const toggleRegions = useToggleRegions()
   const [selectedMmsi, setSelectedMmsi] = useState<number | null>(null)
+  const [selectedPortId, setSelectedPortId] = useState<number | null>(null)
   const [search, setSearch] = useState('')
+  const [filters, setFilters] = useState<FleetFilters>(NO_FILTER)
+  const [showTrack, setShowTrack] = useState(false)
   const [focus, setFocus] = useState<GlobeFocus | null>(null)
 
-  // A vessel that left the fetched window is no longer inspectable; drop it
-  // rather than showing a panel for a ghost.
   const all = rows ?? []
+  const query = search.trim()
+  const filtersActive = filters.motion !== 'all' || filters.shipType !== null
+  const narrowed = query !== '' || filtersActive
+  const visible = useMemo(
+    () => (narrowed ? applyFilters(all, query, filters) : all),
+    [all, query, filters, narrowed],
+  )
+
+  // A vessel that left the drawn window (left the fetch, or a filter hid it)
+  // is no longer inspectable; drop it rather than showing a panel for a ghost.
   useEffect(() => {
-    if (selectedMmsi !== null && !all.some((row) => row.mmsi === selectedMmsi)) {
+    if (selectedMmsi !== null && !visible.some((row) => row.mmsi === selectedMmsi)) {
       setSelectedMmsi(null)
+      setShowTrack(false)
     }
-  }, [all, selectedMmsi])
+  }, [visible, selectedMmsi])
+
+  // Selection is exclusive: a port and a vessel cannot both ride the stage.
+  const selectVessel = (mmsi: number | null) => {
+    setSelectedMmsi(mmsi)
+    setShowTrack(false)
+    if (mmsi !== null) setSelectedPortId(null)
+  }
+  const selectPort = (portId: number | null) => {
+    setSelectedPortId(portId)
+    if (portId !== null) setSelectedMmsi(null)
+  }
+
+  const vessel = selectedMmsi !== null ? visible.find((row) => row.mmsi === selectedMmsi) : undefined
+
+  // Data queries stay mounted in every reading state; they just stay dormant.
+  const portDetail = usePortDetail(selectedPortId)
+  const track = useVesselTrack(selectedMmsi, showTrack)
+  useSyncTrack(health as any, showTrack ? selectedMmsi : null)
 
   if (isPending) {
     return <div className="stage-note">Consultando <code>/positions/latest</code>…</div>
@@ -78,12 +110,9 @@ export function DataStage({ health, rows, isPending, error, regions }: DataStage
     )
   }
 
-  const query = search.trim()
-  const visible = query === '' ? all : all.filter((row) => matches(row, query))
-  const vessel = selectedMmsi !== null ? all.find((row) => row.mmsi === selectedMmsi) : undefined
-
+  const summary = fleetSummary(visible)
+  const portFigures = portSummary(ports ?? [])
   const fullPage = all.length >= POSITIONS_LIMIT
-  const shownCount = query === '' ? all.length : visible.length
 
   return (
     <div className="world">
@@ -91,7 +120,11 @@ export function DataStage({ health, rows, isPending, error, regions }: DataStage
         regions={regions}
         rows={visible}
         selectedMmsi={selectedMmsi}
-        onSelectVessel={setSelectedMmsi}
+        onSelectVessel={selectVessel}
+        ports={ports}
+        selectedPortId={selectedPortId}
+        onSelectPort={selectPort}
+        track={showTrack ? track.data : undefined}
         focus={focus}
       />
       <RegionBar
@@ -101,14 +134,41 @@ export function DataStage({ health, rows, isPending, error, regions }: DataStage
         onFocus={(next) => setFocus(next)}
       />
       <SearchBox value={search} onChange={setSearch} matches={visible.length} active={query !== ''} />
-      {vessel && <InspectPanel vessel={vessel} onClose={() => setSelectedMmsi(null)} />}
+      {vessel && (
+        <InspectPanel
+          vessel={vessel}
+          showTrack={showTrack}
+          onToggleTrack={() => setShowTrack(!showTrack)}
+          onClose={() => selectVessel(null)}
+        />
+      )}
+      {selectedPortId !== null && (
+        <PortPanel
+          detail={portDetail.data}
+          isPending={portDetail.isPending}
+          failed={portDetail.isError}
+          onClose={() => setSelectedPortId(null)}
+          onInspectVessel={(mmsi) => selectVessel(mmsi)}
+        />
+      )}
+      <div className="tray">
+        <FilterBar rows={all} filters={filters} onChange={setFilters} />
+        <KpiBar
+          waiting={summary.waiting}
+          moving={summary.moving}
+          unknown={summary.unknown}
+          portWaiting={portFigures.waiting}
+          portsActive={portFigures.active}
+          narrowed={narrowed}
+        />
+      </div>
       <div className="readout readout--over-world">
-        <div className="readout-count">{formatCount(shownCount)}</div>
+        <div className="readout-count">{formatCount(visible.length)}</div>
         <div className="readout-label">
-          {query === ''
+          {!narrowed
             ? 'buques con posición almacenada'
-            : query !== '' && visible.length > 0
-              ? 'buques mostrados por la búsqueda'
+            : visible.length > 0
+              ? 'buques mostrados por búsqueda y filtros'
               : 'buques coincidentes'}
         </div>
         {all.length === 0 && (

@@ -85,3 +85,26 @@ export function formatNavStatus(code: number | null | undefined): string {
   if (code === null || code === undefined) return '—'
   return NAV_STATUS[code] ?? `Código ${code}`
 }
+
+/** AIS ship-type groups, by primary digit — the taxonomy the filter uses. */
+const SHIP_TYPES: ReadonlyArray<[number, string]> = [
+  [20, 'Efecto suelo'],
+  [30, 'Pesquero'],
+  [40, 'Alta velocidad'],
+  [50, 'Especial'],
+  [60, 'Pasaje'],
+  [70, 'Carga'],
+  [80, 'Cisterna'],
+  [90, 'Otro'],
+]
+
+/**
+ * The primary group of an AIS ship-type code (FASE 11). Secondary digits are
+ * deliberately not labelled: the exact chassis (granelero, portacontenedores,
+ * …) varies by source, and inventing it would claim more than the code says.
+ */
+export function formatShipType(code: number | null | undefined): string {
+  if (code === null || code === undefined) return 'Sin tipo reportado'
+  const [lo, label] = SHIP_TYPES.find(([start]) => code >= start && code < start + 10) ?? [0, '']
+  return lo === 0 ? `Código ${code}` : label
+}

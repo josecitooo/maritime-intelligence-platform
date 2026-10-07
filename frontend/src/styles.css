@@ -226,11 +226,12 @@ body {
 
 /* The readout rides on the world rather than replacing it. Pointer events
    pass through so the sphere stays draggable underneath, and the figure is
-   smaller than in FASE 7: the world is the headline now. */
+   smaller than in FASE 7: the world is the headline now. It floats above the
+   filter/KPI tray (FASE 11), which owns the bottom edge. */
 .readout--over-world {
   position: absolute;
   left: 50%;
-  bottom: 0;
+  bottom: 128px;
   transform: translateX(-50%);
   text-align: center;
   pointer-events: none;
@@ -520,6 +521,295 @@ body {
   border-top: 1px solid var(--line);
   font-size: 12px;
   color: var(--muted);
+}
+
+/* ── Bottom tray: filters + KPIs (FASE 11) ────────────────────────────── */
+
+.tray {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 10px;
+  width: min(980px, calc(100vw - 32px));
+  background: rgba(17, 21, 27, 0.94);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 1px 40px rgba(10, 13, 17, 0.6);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 10px 16px;
+}
+
+.filters__group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filters__label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chip--on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: rgba(79, 163, 176, 0.12);
+}
+
+.filters__select {
+  padding: 4px 6px;
+  font-size: 11px;
+  color: var(--text);
+  background: rgba(10, 13, 17, 0.6);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.filters__clear {
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.filters__clear:hover {
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.kpis {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 18px 28px;
+}
+
+.kpi {
+  text-align: center;
+}
+
+.kpi__value {
+  font-family: var(--font-mono);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.kpi__value--ok {
+  color: var(--ok);
+}
+
+.kpi__value--warn {
+  color: var(--warn);
+}
+
+.kpi__value--bad {
+  color: var(--bad);
+}
+
+.kpi__label {
+  margin-top: 4px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.kpis__port {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.kpis__note {
+  margin: 0;
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.kpis__legend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.dot--idle {
+  background: #55606b;
+}
+
+.dot--ok {
+  background: #57b26a;
+}
+
+.dot--busy {
+  background: #c9963c;
+}
+
+.dot--congested {
+  background: #c25b52;
+}
+
+/* ── Port panel (FASE 10) ────────────────────────────────────────────── */
+
+.port-panel {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+  width: 300px;
+  max-height: calc(100% - 32px);
+  overflow: auto;
+  padding: 14px;
+  background: rgba(17, 21, 27, 0.94);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: 8px;
+  backdrop-filter: blur(6px);
+}
+
+.port-panel__sub {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.port-panel__counts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.port-panel__count {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.port-panel__count--waiting {
+  border-color: #4a3d22;
+}
+
+.port-panel__count--moving {
+  border-color: #2c4a35;
+}
+
+.port-panel__figure {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.port-panel__count dt {
+  margin-top: 4px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.port-panel__window {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.port-panel__note {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.port-panel__note--muted {
+  color: var(--muted);
+}
+
+.port-panel__vessels {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.port-panel__vessel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  text-align: left;
+  color: var(--text);
+  background: rgba(10, 13, 17, 0.4);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.port-panel__vessel:hover {
+  border-color: var(--accent);
+}
+
+.port-panel__vessel-name {
+  font-size: 12px;
+}
+
+.port-panel__vessel-meta {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.inspect__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 8px 0 4px;
 }
 
 .promise {

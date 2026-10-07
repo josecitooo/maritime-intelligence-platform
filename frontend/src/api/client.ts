@@ -13,7 +13,14 @@
  * and the types in `./types` are its hand-written mirror.
  */
 
-import type { HealthResponse, PositionLatest, Region } from './types'
+import type {
+  HealthResponse,
+  PortCongestion,
+  PortCongestionSummary,
+  PositionLatest,
+  Region,
+  TrackPoint,
+} from './types'
 
 /** Base URL of the FastAPI service, without a trailing slash. */
 export const apiBaseUrl = (import.meta.env.VITE_API_URL ?? 'http://localhost:8000').replace(
@@ -119,4 +126,31 @@ export interface RegionToggle {
  */
 export function updateRegions(flips: RegionToggle[], signal?: AbortSignal): Promise<Region[]> {
   return request<Region[]>('PUT', '/regions', { regions: flips }, signal)
+}
+
+/**
+ * `GET /ports/congestion` — every port's reading in one payload (FASE 10).
+ *
+ * The whole map layer in a single round trip: the browser never joins the
+ * catalog by hand, because the port row is embedded in each reading.
+ */
+export function fetchPortCongestion(signal?: AbortSignal): Promise<PortCongestionSummary[]> {
+  return get<PortCongestionSummary[]>('/ports/congestion', signal)
+}
+
+/**
+ * `GET /ports/{id}/congestion` — one port's reading plus the counted vessels.
+ * The vessel list drives the port panel; the counts confirm the layer.
+ */
+export function fetchPortDetail(portId: number, signal?: AbortSignal): Promise<PortCongestion> {
+  return get<PortCongestion>(`/ports/${portId}/congestion`, signal)
+}
+
+/**
+ * `GET /vessels/{mmsi}/track` — every stored position, oldest first, for the
+ * polyline the map draws. An empty list is a valid answer about a vessel with
+ * no stored positions, not an error.
+ */
+export function fetchVesselTrack(mmsi: number, signal?: AbortSignal): Promise<TrackPoint[]> {
+  return get<TrackPoint[]>(`/vessels/${mmsi}/track`, signal)
 }
