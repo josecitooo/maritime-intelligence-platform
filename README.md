@@ -4,8 +4,9 @@ Near real-time maritime traffic intelligence built on live AIS data: an
 automated ingestion pipeline, a PostgreSQL/PostGIS operational store, a FastAPI
 REST layer, and a 3D browser visualisation of vessels, ports and routes.
 
-> **Status: FASE 1 complete** — repository, configuration, Docker and CI.
-> Source data is `aisstream.io`. See [Roadmap](#roadmap).
+> **Status: FASE 4 complete** — ingestion, validation and the PostGIS schema,
+> running against live AIS data. Source data is `aisstream.io`. See
+> [Roadmap](#roadmap).
 
 ---
 
@@ -97,7 +98,8 @@ cp .env.example .env
 cd backend
 python -m venv .venv && .venv\Scripts\activate      # Windows
 pip install -e ".[dev]"
-pytest
+alembic upgrade head                     # create the schema in DATABASE_URL
+pytest                                   # needs the test database — see 4
 uvicorn app.main:app --reload                        # http://localhost:8000/docs
 ```
 
@@ -109,11 +111,17 @@ docker compose up --build                            # API on :8000
 
 ### 4. Test database (integration tests)
 
+From the repository root:
+
 ```bash
 docker compose -f docker-compose.test.yml up -d --wait
-cd backend && pytest
-docker compose -f docker-compose.test.yml down -v
+cd backend && pytest                              # unit + integration
+cd .. && docker compose -f docker-compose.test.yml down -v
 ```
+
+The suite does not skip when this container is missing — CI provisions the
+same one, and a suite that quietly passes without it has quietly stopped
+testing the write path.
 
 ---
 
@@ -145,7 +153,8 @@ Changing the bounding box changes the region under analysis — no code change.
 │   │   ├── main.py              FastAPI entrypoint
 │   │   ├── db/                  engine, session, declarative base
 │   │   ├── providers/base.py    AISProvider protocol + sample dataclasses
-│   │   ├── models/  schemas/    FASE 4 / FASE 6
+│   │   ├── models/               vessels · vessel_positions · ingestion_runs
+│   │   ├── schemas/              FASE 6
 │   │   ├── api/routers/         FASE 6
 │   │   ├── ingestion/           FASE 2-4
 │   │   ├── maintenance/         FASE 5
@@ -167,13 +176,14 @@ Changing the bounding box changes the region under analysis — no code change.
 ```bash
 cd backend
 ruff check .
-pytest                 # unit
-pytest -m integration   # needs the test database (see above)
+pytest                    # unit + integration
+pytest -m integration     # only what needs PostGIS
 ```
 
 Tests are real: configuration validation, bounding-box invariants, log
-redaction. Fixtures for the ingestion pipeline are **recorded frames from the
-live stream**, not invented data.
+redaction, and — against a live PostGIS container — the write path
+(`tests/integration/`). Fixtures for the ingestion pipeline are **recorded
+frames from the live stream**, not invented data.
 
 ---
 
@@ -182,7 +192,7 @@ live stream**, not invented data.
 | Document | Contents |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Decisions, alternatives, why |
-| `docs/data-model.md` | FASE 4 |
+| [`docs/data-model.md`](docs/data-model.md) | Tables, keys, merge rules, and what is deliberately not stored |
 | `docs/ingestion.md` | FASE 2 |
 | `docs/congestion.md` | FASE 10 |
 | `docs/deployment.md` | FASE 13 |

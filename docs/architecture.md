@@ -79,9 +79,10 @@ window. The buffer is capped (`BUFFER_MAX_MESSAGES`) so memory is bounded.
 The bounding box sets which vessels get counted. The default
 `Gulf + Caribbean` box measures 344 distinct vessels per minute
 (`docs/ingestion.md` §2), so the "2 000 vessels" column is the right order
-of magnitude rather than a guess. The actual concurrent fleet is measured at
-the first flush in FASE 4 — until then this table is the planning model, and
-`POSITION_INTERVAL_MINUTES` is the single lever if growth runs high.
+of magnitude rather than a guess. Persistence now records the real figure per
+flush in `ingestion_runs.vessels`, so this table becomes measured data as soon
+as enough windows have run — and `POSITION_INTERVAL_MINUTES` stays the single
+lever if growth runs high.
 
 ---
 
@@ -110,7 +111,9 @@ ETL target and an API source; keeping them apart means a column rename cannot
 silently change the public contract.
 
 Migrations are Alembic, with the URL injected from `app.config` so the same
-settings file drives local, test and production.
+settings file drives local, test and production. `alembic check` runs as a test,
+so a model that changes without its migration fails the suite rather than the
+first deploy.
 
 ---
 
@@ -125,6 +128,11 @@ bounding arithmetic.
 **Rejected** — "vessels within N km of a port" is a proximity query. Doing it
 correctly with plain lat/lon means re-deriving spherical math in every caller.
 PostGIS expresses it once and correctly.
+
+**Consequence** — `geom` is a *generated column* derived from `latitude` and
+`longitude`, so the application never constructs geometry and cannot put a
+point out of step with the row it describes; `persist_window` does not know
+PostGIS is there. See `docs/data-model.md` §2.
 
 ---
 

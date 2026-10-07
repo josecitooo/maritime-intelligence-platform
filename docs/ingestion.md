@@ -249,17 +249,16 @@ that fired at the boundary would drop legitimate data for no gain. The
 subscription *is* the region filter, and it is configured by `MIN_LAT` …
 `MAX_LON` rather than re-checked downstream.
 
-**Position jump > 50 km between samples** — deferred to FASE 4, where the
-previous position comes from `vessel_positions`. Detecting it in memory would
-mean holding a second copy of "where this vessel was last"; it resets on every
-restart, so the same anomalous flight would be flagged or missed depending on
-when the process was last redeployed. A flag that lies sometimes is worse than
-no flag, and the stored row is the authoritative previous position anyway —
-reading it is a query the flush already makes.
+**Position jump > 50 km between samples** — still open, and no longer
+blocked: `vessel_positions` exists now, and it is the authoritative previous
+position. An in-memory copy would reset on every restart, so the same anomalous
+flight would be flagged or missed depending on when the process was last
+redeployed; a flag that lies sometimes is worse than no flag. It needs a
+per-row `flags` column to record what it found — see `docs/data-model.md`.
 
 Rejected counts are aggregated by reason into `ingestion_runs.rejected` as
-JSONB, flags the same way in `ingestion_runs.flagged`; until FASE 4 both are
-in the structured logs. In the live run of §4 both were empty.
+JSONB, flags the same way in `ingestion_runs.flagged`; both also go to the
+structured log at every window close. In the live run of §4 both were empty.
 
 ---
 
@@ -268,6 +267,11 @@ in the structured logs. In the live run of §4 both were empty.
 `vessel_positions` has primary key `(mmsi, timestamp)` and inserts use
 `ON CONFLICT DO NOTHING`. Replaying a window, or restarting mid-flush, cannot
 create duplicates.
+
+`ingestion_runs` is deliberately **not** deduplicated: two flushes are two
+events, and the second row is the evidence that a retry happened. The write
+precedes `buffer.clear()`, so a failure leaves the window in place for the next
+attempt rather than dropping it. Full detail in `docs/data-model.md` §3.
 
 ---
 
@@ -280,7 +284,7 @@ create duplicates.
 | Socket closes mid-stream | logged with reason, reconnect and resubscribe within 3 s |
 | Malformed frame | counted as `decode_errors`, logged at DEBUG, does not abort the window |
 | Well-formed frame with nothing usable | counted as `unusable` and logged at DEBUG with its reason — a message type outside the decode set, an AIS type 24 part B with `Valid: false`, or a nameless part A. Not an error: the frame was readable, it simply had nothing for us |
-| Database unavailable at flush | window stays buffered and is retried; `ingestion_runs` records the failure — the batch is never lost silently |
+| Database unavailable at flush | window stays buffered and is retried, so the batch is never lost silently. **No `ingestion_runs` row is written**: the run row and the positions it counts share one transaction, and a failed flush must not leave a record claiming it happened. The failure is the gap in `window_end` plus the error log |
 
 `/health` exposes `last_flush`, `last_ais_message` and `data_freshness_minutes`
 so a stalled pipeline is diagnosable from outside.
