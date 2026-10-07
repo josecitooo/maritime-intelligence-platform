@@ -34,7 +34,23 @@ def test_postgres_bounds_the_connect_time(monkeypatch: pytest.MonkeyPatch) -> No
 
     build_engine("postgresql+psycopg://user:pass@host/db")
 
-    assert captured["connect_args"] == {"connect_timeout": CONNECT_TIMEOUT_SECONDS}
+    assert captured["connect_args"]["connect_timeout"] == CONNECT_TIMEOUT_SECONDS
+
+
+def test_postgres_never_prepares_statements(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Supabase's session pooler cannot carry a named prepared statement.
+
+    psycopg promotes a query to a prepared one after five runs. The session
+    pooler is transaction-mode pgbouncer, so the next transaction lands on a
+    backend that never saw that statement and answers "prepared statement
+    does not exist" — repeated reads like `/health` hit it within minutes.
+    `None` means never prepare; `0` would mean prepare at once.
+    """
+    captured = _capture(monkeypatch)
+
+    build_engine("postgresql+psycopg://user:pass@host/db")
+
+    assert captured["connect_args"]["prepare_threshold"] is None
 
 
 def test_other_backends_are_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -40,7 +40,18 @@ def build_engine(url: str) -> Engine:
             pool_size=5,
             max_overflow=10,
             pool_recycle=1800,
-            connect_args={"connect_timeout": CONNECT_TIMEOUT_SECONDS},
+            connect_args={
+                "connect_timeout": CONNECT_TIMEOUT_SECONDS,
+                # psycopg promotes a statement to a named prepared one after
+                # `prepare_threshold` runs. Supabase's session pooler is
+                # transaction-mode pgbouncer: each transaction may land on a
+                # different backend, which cannot see a statement prepared on
+                # another — and our reads repeat the same SQL constantly.
+                # `None` means "never prepare" (`0` would mean "prepare at
+                # once"). What it costs is re-parsing each query, which does
+                # not matter at this rate.
+                "prepare_threshold": None,
+            },
         )
     return create_engine(url, **kwargs)
 
