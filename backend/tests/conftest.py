@@ -22,6 +22,10 @@ os.environ.pop("AISSTREAM_API_KEY", None)
 # Blank, not unset: unsetting it would let the developer's `.env` decide and
 # 401 every request. An empty value outranks the file, so this forces "no key".
 os.environ["API_READ_KEY"] = ""
+# Writes are *disabled* for the test run too: a developer key in `.env` must
+# not silently open the region-selection surface during test runs. Tests that
+# exercise the write path set their own key first.
+os.environ["API_WRITE_KEY"] = ""
 # Port 5433 matches docker-compose.test.yml. CI overrides this with its own
 # DATABASE_URL (port 5432, service container) — setdefault keeps that override.
 os.environ.setdefault(

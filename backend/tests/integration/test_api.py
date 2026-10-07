@@ -39,6 +39,7 @@ STATIC_ONLY = 373_111_111
 ABSENT = 373_000_000
 
 _KEY = "integration-read-key"
+_WRITE_KEY = "integration-write-key"
 
 #: Exactly what `PositionLatest` declares: `rot` and `geom` are stored but
 #: never sent (`app/schemas/positions.py`).
@@ -329,6 +330,112 @@ def test_an_mmsi_with_nothing_stored_has_an_empty_track(client: TestClient) -> N
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+# ── /regions: the monitored-region catalog ──────────────────────────────
+#
+# `_TRUNCATE` (integration/conftest.py) deliberately leaves `tracked_regions`
+# alone: the catalog is seed data, not test data. Write tests therefore flip
+# flags and always flip them back, so the next test meets a pristine catalog.
+
+
+def test_the_catalog_is_seeded_with_only_the_default_region_enabled(
+    client: TestClient,
+) -> None:
+    """Twelve named regions; the seed enables exactly the legacy bbox."""
+    rows = client.get("/regions").json()
+
+    assert len(rows) == 12
+    caribe = next(row for row in rows if row["name"] == "Caribe y Golfo de México")
+    assert caribe["enabled"] is True
+    assert (caribe["min_lat"], caribe["max_lat"], caribe["min_lon"], caribe["max_lon"]) == (
+        8.0,
+        31.0,
+        -98.0,
+        -59.0,
+    )
+    assert all(row["enabled"] is False for row in rows if row is not caribe)
+
+
+def test_regions_write_flips_the_selection_and_persists(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The UI's toggle writes through the real router and stays written."""
+    monkeypatch.setenv("API_WRITE_KEY", _WRITE_KEY)
+    get_settings.cache_clear()
+    try:
+        flip = [
+            {"name": "Caribe y Golfo de México", "enabled": False},
+            {"name": "Estrecho de Malaca y Sudeste Asiático", "enabled": True},
+        ]
+        response = client.put(
+            "/regions",
+            json={"regions": flip},
+            headers={"X-Write-Key": _WRITE_KEY},
+        )
+        assert response.status_code == 200
+
+        after = {row["name"]: row["enabled"] for row in response.json()}
+        assert after["Caribe y Golfo de México"] is False
+        assert after["Estrecho de Malaca y Sudeste Asiático"] is True
+
+        # A fresh read agrees: the flip is in the database, not in the response.
+        persisted = {row["name"]: row["enabled"] for row in client.get("/regions").json()}
+        assert persisted["Estrecho de Malaca y Sudeste Asiático"] is True
+    finally:
+        client.put(
+            "/regions",
+            json={
+                "regions": [
+                    {"name": "Caribe y Golfo de México", "enabled": True},
+                    {"name": "Estrecho de Malaca y Sudeste Asiático", "enabled": False},
+                ]
+            },
+            headers={"X-Write-Key": _WRITE_KEY},
+        )
+        get_settings.cache_clear()
+
+
+def test_regions_write_rejects_an_unknown_name_and_writes_nothing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale browser must not be able to silently drop a region it lost."""
+    monkeypatch.setenv("API_WRITE_KEY", _WRITE_KEY)
+    get_settings.cache_clear()
+    try:
+        response = client.put(
+            "/regions",
+            json={"regions": [{"name": "Atlántida", "enabled": True}]},
+            headers={"X-Write-Key": _WRITE_KEY},
+        )
+        assert response.status_code == 404
+
+        rows = client.get("/regions").json()
+        caribe = next(row for row in rows if row["name"] == "Caribe y Golfo de México")
+        assert caribe["enabled"] is True
+    finally:
+        get_settings.cache_clear()
+
+
+def test_regions_write_rejects_disabling_every_region(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stream is asked about at least one box, so the last flag cannot fall."""
+    monkeypatch.setenv("API_WRITE_KEY", _WRITE_KEY)
+    get_settings.cache_clear()
+    try:
+        response = client.put(
+            "/regions",
+            json={"regions": [{"name": "Caribe y Golfo de México", "enabled": False}]},
+            headers={"X-Write-Key": _WRITE_KEY},
+        )
+        assert response.status_code == 422
+
+        rows = client.get("/regions").json()
+        caribe = next(row for row in rows if row["name"] == "Caribe y Golfo de México")
+        assert caribe["enabled"] is True
+    finally:
+        get_settings.cache_clear()
 
 
 # ── the read key, end to end ────────────────────────────────────────────
