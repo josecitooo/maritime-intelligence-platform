@@ -1,19 +1,257 @@
-/* Control-room theme: dark surfaces, low-chroma accents, no neon. */
+/*
+ * Control-room theme.
+ *
+ * Hierarchy: the stage (the maritime world from FASE 8) owns the screen, the
+ * header and status bar are thin rails around it, and KPIs and filters arrive
+ * last (FASE 11). Dark surfaces, low-chroma accents, monospaced figures —
+ * restraint instead of neon.
+ */
+
 :root {
   color-scheme: dark;
   --bg: #0a0d11;
+  --rail: #11151b;
+  --line: #1e2530;
   --text: #d5dce6;
+  --muted: #7b8797;
+  --accent: #4fa3b0;
+  --ok: #57b26a;
+  --warn: #c9963c;
+  --bad: #c25b52;
+  --font-ui: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Cascadia Mono', Consolas, 'SFMono-Regular', ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
 }
 
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
 }
+
+.app {
+  display: grid;
+  grid-template-rows: 52px minmax(0, 1fr) 36px;
+  height: 100%;
+}
+
+/* ── Header rail ─────────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 20px;
+  background: var(--rail);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.region {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pill {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+}
+
+.pill::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.pill--connecting {
+  color: var(--muted);
+}
+
+.pill--ok {
+  color: var(--ok);
+  border-color: #2c4a35;
+}
+
+.pill--degraded {
+  color: var(--warn);
+  border-color: #4a3d22;
+}
+
+.pill--unreachable {
+  color: var(--bad);
+  border-color: #4a2b28;
+}
+
+/* ── Stage ───────────────────────────────────────────────────────────── */
 
 .stage {
   display: grid;
   place-items: center;
-  min-height: 100vh;
+  padding: 24px;
+  overflow: auto;
+}
+
+.stage-note {
+  max-width: 460px;
+  text-align: center;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.stage-note h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.stage-note p {
+  margin: 6px 0;
+}
+
+.stage-note--error h2 {
+  color: var(--bad);
+}
+
+.stage-note code {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.stage-url {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.readout {
+  text-align: center;
+}
+
+.readout-count {
+  font-family: var(--font-mono);
+  font-size: 76px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.readout-label {
+  margin-top: 12px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.readout-fields {
+  display: flex;
+  justify-content: center;
+  gap: 48px;
+  margin: 32px 0 0;
+}
+
+.readout-fields dt {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.readout-fields dd {
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 15px;
+}
+
+/* ── Status bar ──────────────────────────────────────────────────────── */
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 20px;
+  background: var(--rail);
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.promise {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.promise--unknown {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.sep {
+  width: 1px;
+  height: 14px;
+  background: var(--line);
+}
+
+.field-label {
+  margin-right: 6px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.field-value {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.grow {
+  flex: 1;
+}
+
+.meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
 }
