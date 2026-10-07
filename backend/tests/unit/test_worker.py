@@ -59,7 +59,13 @@ def make_worker(provider) -> tuple[IngestionWorker, list[tuple[WindowResult, str
     worker = IngestionWorker(provider)
     reported: list[tuple[WindowResult, str]] = []
 
-    async def spy(result: WindowResult, *, reason: str, gap_seconds: float | None) -> None:
+    async def spy(
+        result: WindowResult,
+        *,
+        reason: str,
+        window_start: datetime | None,
+        window_end: datetime,
+    ) -> None:
         reported.append((result, reason))
 
     worker._report = spy  # shadow the logger with an observable double
@@ -154,7 +160,7 @@ async def test_the_flush_loop_survives_a_failed_window(app_settings):
     attempts = 0
     seen: list[int] = []
 
-    async def flaky(result, *, reason, gap_seconds):
+    async def flaky(result, *, reason, window_start, window_end):
         nonlocal attempts
         attempts += 1
         seen.append(len(result.positions))

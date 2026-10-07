@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 
 from app.config import Settings, get_settings
 from app.ingestion.buffer import SampleBuffer
+from app.ingestion.persistence import persist_window
 from app.ingestion.pipeline import WindowResult, process_window
 from app.logging import get_logger, setup_logging
 from app.providers.aisstream import AISStreamProvider, SubscriptionRejected
@@ -99,21 +100,23 @@ class IngestionWorker:
             raise failure
 
     async def flush_once(self, *, reason: str = "scheduled") -> WindowResult:
-        """Validate the window, report it, then drain it.
+        """Validate the window, write it, then drain it.
 
-        Reporting precedes the drain, so a failed flush leaves the samples in
+        The write precedes the drain, so a failed flush leaves the samples in
         place for the next attempt. `process_window` is pure, so a retry
         recomputes the same verdict from the same input rather than judging a
         window twice against different state.
         """
         started = datetime.now(UTC)
-        gap_seconds = (
-            (started - self.last_flush).total_seconds() if self.last_flush is not None else None
-        )
         result = process_window(self.buffer.snapshot())
-        await self._report(result, reason=reason, gap_seconds=gap_seconds)
+        await self._report(
+            result,
+            reason=reason,
+            window_start=self.last_flush,
+            window_end=started,
+        )
         self.buffer.clear()
-        self.last_flush = datetime.now(UTC)
+        self.last_flush = started
         return result
 
     # ── Tasks ──────────────────────────────────────────────────────────
@@ -156,15 +159,37 @@ class IngestionWorker:
     # ── Hooks ──────────────────────────────────────────────────────────
 
     async def _report(
-        self, result: WindowResult, *, reason: str, gap_seconds: float | None
+        self,
+        result: WindowResult,
+        *,
+        reason: str,
+        window_start: datetime | None,
+        window_end: datetime,
     ) -> None:
-        """Log the window's verdict.
+        """Write the window, then log its verdict.
 
-        This is also the seam where the database write belongs: it must run
-        before the caller drains the buffer, so a write failure leaves the
-        window intact for the next attempt. Validation has already run, so
-        rejected rows are gone before anything could persist them.
+        This is the seam the buffer drains after, so the write must land
+        here: a failure raises, the caller keeps the samples, and nothing is
+        lost by retrying. Validation has already run, so rejected rows are
+        gone before anything could persist them.
+
+        The write runs in a thread because the consumer keeps reading the
+        socket meanwhile. aisstream drops messages when reading stalls, and a
+        database round trip is exactly the kind of pause that stalls it.
         """
+        await asyncio.to_thread(
+            persist_window,
+            result,
+            window_start=window_start,
+            window_end=window_end,
+            reason=reason,
+        )
+
+        gap_seconds = (
+            (window_end - window_start).total_seconds()
+            if window_start is not None
+            else None
+        )
         stats = self.provider
         log.info(
             "ingestion window closed",
