@@ -17,12 +17,31 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
 
+#: Bounded so an unreachable database becomes a fast failure rather than a
+#: request that outlives the Dockerfile's healthcheck (`HEALTHCHECK --timeout=5s`
+#: against `GET /health`). libpq applies it per resolved address, so the worst
+#: case is this figure times the addresses in the record — see
+#: `docs/architecture.md` §11.
+CONNECT_TIMEOUT_SECONDS = 2
+
 
 def build_engine(url: str) -> Engine:
-    """Build an engine, tuning the pool only for PostgreSQL backends."""
+    """Build an engine, tuned only for PostgreSQL backends.
+
+    `pool_pre_ping` handles a connection that dies while idle; the connect
+    timeout handles one that never opens. Without it a paused or firewalled
+    database leaves every caller — `/health`, the API, the worker's flush —
+    blocked on the OS TCP timeout, which is far longer than any caller can
+    wait and longer than the healthcheck's budget.
+    """
     kwargs: dict[str, Any] = {"future": True, "pool_pre_ping": True}
     if url.startswith("postgresql"):
-        kwargs.update(pool_size=5, max_overflow=10, pool_recycle=1800)
+        kwargs.update(
+            pool_size=5,
+            max_overflow=10,
+            pool_recycle=1800,
+            connect_args={"connect_timeout": CONNECT_TIMEOUT_SECONDS},
+        )
     return create_engine(url, **kwargs)
 
 
