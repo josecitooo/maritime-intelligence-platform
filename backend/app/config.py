@@ -78,6 +78,15 @@ class Settings(BaseSettings):
     #: costs a reconnect — this cadence only bounds how long a change waits.
     region_refresh_seconds: int = Field(default=30, ge=5, le=3600)
 
+    # ── Port congestion (FASE 10) ──────────────────────────────────────
+    #: How far around a port a vessel counts as "in it". Published congestion
+    #: products talk about 25-60 nm port vicinity windows; 50 km is a single
+    #: defensible default (docs/architecture.md §7 mentions the same radius).
+    port_congestion_radius_km: int = Field(default=50, ge=1, le=500)
+    #: Positions older than this are not "in the port" — congestion is a
+    #: property of the *current* vicinity, not of this week's anchorage.
+    port_congestion_recency_hours: int = Field(default=12, ge=1, le=168)
+
     # ── Database ───────────────────────────────────────────────────────
     database_url: str = "postgresql+psycopg://maritime:maritime@localhost:5432/maritime"
 

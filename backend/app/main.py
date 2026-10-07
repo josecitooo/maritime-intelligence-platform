@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api.routers import health, positions, regions, vessels
+from app.api.routers import health, ports, positions, regions, vessels
 from app.config import get_settings
 from app.logging import setup_logging
 
@@ -60,6 +60,7 @@ app.add_middleware(
 # a secret (`app/api/auth.py`). `GET /regions` is similarly open — it is
 # operational metadata, and the browser needs it before any credential exists.
 app.include_router(health.router)
+app.include_router(ports.router)
 app.include_router(positions.router)
 app.include_router(regions.router)
 app.include_router(vessels.router)
