@@ -21,8 +21,8 @@ from datetime import UTC, datetime
 
 from app.config import Settings, get_settings
 from app.ingestion.buffer import SampleBuffer
-from app.ingestion.persistence import persist_window
-from app.ingestion.pipeline import WindowResult, process_window
+from app.ingestion.persistence import load_previous_positions, persist_window
+from app.ingestion.pipeline import PreviousPosition, WindowResult, process_window
 from app.logging import get_logger, setup_logging
 from app.providers.aisstream import AISStreamProvider, SubscriptionRejected
 from app.providers.base import AISProvider, PositionSample
@@ -100,15 +100,20 @@ class IngestionWorker:
             raise failure
 
     async def flush_once(self, *, reason: str = "scheduled") -> WindowResult:
-        """Validate the window, write it, then drain it.
+        """Fetch the anchors, judge the window, write it, then drain it.
 
         The write precedes the drain, so a failed flush leaves the samples in
         place for the next attempt. `process_window` is pure, so a retry
         recomputes the same verdict from the same input rather than judging a
-        window twice against different state.
+        window twice against different state — and the anchors are read fresh
+        on each attempt, so they cannot drift while a window waits.
         """
         started = datetime.now(UTC)
-        result = process_window(self.buffer.snapshot())
+        batch = self.buffer.snapshot()
+        previous = await self._load_previous_positions(
+            {sample.mmsi for sample in batch.positions}
+        )
+        result = process_window(batch, previous=previous)
         await self._report(
             result,
             reason=reason,
@@ -157,6 +162,19 @@ class IngestionWorker:
                 delay = interval_seconds
 
     # ── Hooks ──────────────────────────────────────────────────────────
+
+    async def _load_previous_positions(
+        self, mmsis: set[int]
+    ) -> dict[int, PreviousPosition]:
+        """Where each vessel in the window was last *stored*.
+
+        The one read that has to happen before validation, because
+        `position_jump` compares this window against a previous one and no
+        single window knows that. It runs in a thread for the same reason the
+        write does: the consumer must keep reading the socket, and aisstream
+        drops messages when reading stalls.
+        """
+        return await asyncio.to_thread(load_previous_positions, mmsis)
 
     async def _report(
         self,

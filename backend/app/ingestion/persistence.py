@@ -8,23 +8,26 @@ that is. It also means a failed write leaves the window untouched: the caller
 has lost nothing by retrying, and there is no `status` column to disagree with
 reality.
 
-**Nothing is written before validation.** `process_window` has already
-rejected what must not be stored. This module receives a `WindowResult` and
-has no view of anything else, so an invalid row cannot reach it by any path
-other than a bug in the caller.
+**Nothing is written that validation did not vouch for.** `process_window` has
+already rejected what must not be stored, and this module writes only from the
+`WindowResult` it is handed. The one thing it reads —
+`load_previous_positions` — fetches the *past*, which is never a candidate for
+writing, and it happens before the window is judged so `position_jump` has an
+anchor to measure against.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime
 
-from sqlalchemy import func
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.db.session import session_scope
-from app.ingestion.pipeline import WindowResult, dimensions
+from app.ingestion.pipeline import PreviousPosition, WindowResult, dimensions
 from app.models import IngestionRun, Vessel, VesselPosition
 from app.providers.base import PositionSample, StaticSample
 
@@ -42,6 +45,38 @@ _MERGEABLE = (
     "eta",
     "source",
 )
+
+
+def load_previous_positions(mmsis: Collection[int]) -> dict[int, PreviousPosition]:
+    """The last *stored* position of each vessel, as of before this window.
+
+    A window cannot supply this itself: it holds what arrived since the last
+    flush, and `position_jump` is precisely the claim that the two disagree.
+    The worker fetches these anchors before calling `process_window`, so the
+    rule stays pure and the read stays out of the write path.
+
+    `DISTINCT ON (mmsi)` rides the primary key `(mmsi, timestamp)`, which is
+    already in track order, so "latest row per vessel" is a property of the
+    index rather than a sort.
+    """
+    if not mmsis:
+        return {}
+    with session_scope() as session:
+        rows = session.execute(
+            select(
+                VesselPosition.mmsi,
+                VesselPosition.timestamp,
+                VesselPosition.latitude,
+                VesselPosition.longitude,
+            )
+            .where(VesselPosition.mmsi.in_(mmsis))
+            .order_by(VesselPosition.mmsi, VesselPosition.timestamp.desc())
+            .ext(distinct_on(VesselPosition.mmsi))
+        )
+        return {
+            mmsi: PreviousPosition(timestamp=timestamp, latitude=latitude, longitude=longitude)
+            for mmsi, timestamp, latitude, longitude in rows
+        }
 
 
 def persist_window(

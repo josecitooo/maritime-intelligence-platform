@@ -2,8 +2,9 @@
 
 A unit test can prove `persist_window` was called. Only these can prove the
 SQL that runs is the SQL we meant: that PostGIS derives `geom`, that a replay
-is a no-op, that a type-24 frame cannot erase a ship type, and that the
-window and its run row share a transaction.
+is a no-op, that a type-24 frame cannot erase a ship type, that the window and
+its run row share a transaction, and — for the one distance computed outside
+PostGIS — that it still lands on PostGIS's answer.
 
 Run them with the test database up (README §4). They do not skip.
 """
@@ -23,8 +24,8 @@ from sqlalchemy import func, select, text
 from alembic import command
 from app.db.session import session_scope
 from app.ingestion.buffer import WindowBatch
-from app.ingestion.persistence import persist_window
-from app.ingestion.pipeline import process_window
+from app.ingestion.persistence import load_previous_positions, persist_window
+from app.ingestion.pipeline import haversine_km, process_window
 from app.models import IngestionRun, Vessel, VesselPosition
 from app.providers.base import PositionSample, StaticSample
 from app.worker import IngestionWorker
@@ -42,15 +43,16 @@ BASE = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 
 def position(mmsi: int = 373_123_456, *, minute: int = 0, **overrides: object) -> PositionSample:
     """A position validation accepts: nine-digit MMSI, coordinates in range."""
-    return PositionSample(
+    sample_fields: dict = dict(
         mmsi=mmsi,
         timestamp=BASE + timedelta(minutes=minute),
         latitude=LATITUDE,
         longitude=LONGITUDE,
         received_at=BASE + timedelta(minutes=minute, seconds=4),
         source="aisstream.io",
-        **overrides,
     )
+    sample_fields.update(overrides)
+    return PositionSample(**sample_fields)
 
 
 def static(mmsi: int = 373_123_456, *, minute: int = 0, **overrides: object) -> StaticSample:
@@ -219,6 +221,64 @@ def test_geom_is_derived_from_the_stored_coordinates() -> None:
         ).scalar_one()
 
     assert distance < 1.0  # within a metre of the exact stored coordinates
+
+
+# ── the distance question (§7) ──────────────────────────────────────────
+
+
+def test_the_one_distance_computed_in_python_agrees_with_postgis() -> None:
+    """PostGIS owns §7's distance question; `haversine_km` is the single exception.
+
+    It has to be, because a jump is measured against a position that may still
+    be in memory and therefore is not in the database yet. This pins that one
+    exception to the answer the database gives, so a wrong radius, a degrees
+    for radians slip or a swapped latitude would all fail here rather than on
+    the map.
+    """
+    pairs = [
+        # Santo Domingo → Trinidad, and two long crossings.
+        ((18.4717, -69.9300), (10.6500, -61.5000)),
+        ((10.5, -61.5), (25.0, -80.0)),
+        ((31.0, -98.0), (8.0, -59.0)),  # the bounding box's corners
+    ]
+    for (lat1, lon1), (lat2, lon2) in pairs:
+        with session_scope() as session:
+            metres = session.execute(
+                text(
+                    "SELECT ST_Distance("
+                    "ST_SetSRID(ST_MakePoint(:lon1, :lat1), 4326)::geography, "
+                    "ST_SetSRID(ST_MakePoint(:lon2, :lat2), 4326)::geography)"
+                ),
+                {"lat1": lat1, "lon1": lon1, "lat2": lat2, "lon2": lon2},
+            ).scalar_one()
+
+        # PostGIS measures WGS84's ellipsoid, the formula a sphere: they differ
+        # by a fraction of a percent by construction. Beyond that is a bug.
+        assert haversine_km(lat1, lon1, lat2, lon2) == pytest.approx(
+            metres / 1000.0, rel=0.005
+        )
+
+
+# ── the anchor position_jump measures from ───────────────────────────────
+
+
+def test_the_anchor_is_the_latest_stored_fix_of_each_vessel() -> None:
+    """One query, one row per vessel, and a vessel with no history simply absent."""
+    window(
+        positions=[
+            position(373_123_456, minute=0),
+            position(373_123_456, minute=10, latitude=LATITUDE + 0.5),
+            position(373_654_321, minute=0, longitude=LONGITUDE - 0.5),
+        ]
+    )
+
+    anchors = load_previous_positions({373_123_456, 373_654_321, 373_000_000})
+
+    assert set(anchors) == {373_123_456, 373_654_321}
+    assert anchors[373_123_456].timestamp == BASE + timedelta(minutes=10)
+    assert anchors[373_123_456].latitude == LATITUDE + 0.5
+    assert anchors[373_654_321].longitude == LONGITUDE - 0.5
+    assert load_previous_positions(set()) == {}
 
 
 # ── the seam and the migration ──────────────────────────────────────────

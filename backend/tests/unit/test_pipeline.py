@@ -9,13 +9,16 @@ vessel being somewhere.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.ingestion.buffer import WindowBatch
 from app.ingestion.pipeline import (
     MAX_PLAUSIBLE_SOG_KNOTS,
+    POSITION_JUMP,
     SOG_IMPLAUSIBLE,
+    PreviousPosition,
     dimensions,
+    haversine_km,
     position_flags,
     process_window,
 )
@@ -161,6 +164,105 @@ def test_a_speed_at_the_boundary_is_not_flagged():
 def test_an_unreported_speed_cannot_be_judged():
     """`None` means the source said nothing — not that the vessel was standing still."""
     assert position_flags(position(sog=None)) == frozenset()
+
+
+# ── position_jump: displacement over the time available ─────────────────────
+
+
+def anchor(minute: int, latitude: float, longitude: float) -> PreviousPosition:
+    return PreviousPosition(
+        timestamp=T0 + timedelta(minutes=minute),
+        latitude=latitude,
+        longitude=longitude,
+    )
+
+
+def test_a_speed_no_hull_could_make_between_two_flushes_is_flagged():
+    """20 km in ten minutes is 65 kn — not a voyage, a broken fix."""
+    previous = {355693000: anchor(-10, 10.5, -61.5)}
+    result = process_window(
+        batch([position(timestamp=T0, longitude=-60.6)]),
+        previous=previous,
+    )
+
+    assert result.positions[0].longitude == -60.6
+    assert result.flagged == {POSITION_JUMP: 1}
+    assert result.row_flags == {
+        (355693000, T0): frozenset({POSITION_JUMP})
+    }
+
+
+def test_a_vessel_out_of_radio_range_for_six_hours_is_not_flagged():
+    """50 km over six hours is 4.5 kn. The distance threshold would have called this a jump; the speed threshold knows a slow boat when it sees one."""
+    previous = {355693000: anchor(-6 * 60, 10.5, -61.5)}
+    result = process_window(
+        batch([position(timestamp=T0, longitude=-61.04)]),
+        previous=previous,
+    )
+
+    assert result.flagged == {}
+
+
+def test_a_displacement_shorter_than_the_minimum_gap_is_not_judged():
+    """A 30-second gap makes the ratio a statement about the sensor, not the vessel."""
+    previous = {355693000: PreviousPosition(timestamp=T0, latitude=10.5, longitude=-61.5)}
+    late = position(timestamp=T0 + timedelta(seconds=30), longitude=-60.6)
+
+    assert process_window(batch([late]), previous=previous).flagged == {}
+
+
+def test_the_previous_sample_inside_the_window_is_the_anchor_too():
+    """A vessel that reports three times in one window is checked three times."""
+    first = position(timestamp=T0, longitude=-61.5)
+    second = position(timestamp=T0 + timedelta(minutes=10), longitude=-60.6)
+
+    result = process_window(batch([first, second]))
+
+    assert (355693000, first.timestamp) not in result.row_flags
+    assert result.row_flags[(355693000, second.timestamp)] == frozenset(
+        {POSITION_JUMP}
+    )
+
+
+def test_an_out_of_order_report_neither_judges_nor_rewrites_the_anchor():
+    """A position older than the last one stored cannot be compared, and must not become the yardstick."""
+    previous = {355693000: PreviousPosition(timestamp=T0, latitude=10.5, longitude=-61.5)}
+    older = position(timestamp=T0 - timedelta(minutes=5), longitude=-60.6)
+    newer = position(timestamp=T0 + timedelta(minutes=5), longitude=-61.5)
+
+    result = process_window(batch([older, newer]), previous=previous)
+
+    # `newer` sits on top of the anchor, so nothing jumped — which only holds
+    # if the out-of-order sample never replaced the anchor.
+    assert result.flagged == {}
+
+
+def test_a_row_can_carry_both_verdicts_at_once():
+    """A hull reporting 70 kn *and* teleporting is one row with two problems."""
+    previous = {355693000: anchor(-10, 10.5, -61.5)}
+    sample = position(timestamp=T0, longitude=-60.6, sog=MAX_PLAUSIBLE_SOG_KNOTS + 30.0)
+
+    result = process_window(batch([sample]), previous=previous)
+
+    assert result.row_flags[(sample.mmsi, sample.timestamp)] == frozenset(
+        {POSITION_JUMP, SOG_IMPLAUSIBLE}
+    )
+    assert result.flagged == {POSITION_JUMP: 1, SOG_IMPLAUSIBLE: 1}
+
+
+def test_without_history_a_window_makes_no_claim_about_jumps():
+    """`previous` is the rule's whole premise; an empty one means no claim, not a pass."""
+    result = process_window(batch([position()]))
+
+    assert result.flagged == {}
+    assert result.row_flags == {}
+
+
+def test_the_distance_is_a_great_circle_not_a_longitude_sum():
+    """A degree of longitude shrinks towards the poles — the raw difference would overstate every east-west jump."""
+    assert haversine_km(0.0, 0.0, 0.0, 1.0) < 111.3
+    assert haversine_km(60.0, 0.0, 60.0, 1.0) < 56.0
+    assert haversine_km(10.5, -61.5, 10.5, -61.5) == 0.0
 
 
 # ── transform ───────────────────────────────────────────────────────────────

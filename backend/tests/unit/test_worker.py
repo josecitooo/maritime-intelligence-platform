@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.ingestion.pipeline import WindowResult
+from app.ingestion.pipeline import POSITION_JUMP, PreviousPosition, WindowResult
 from app.providers.aisstream import SubscriptionRejected
 from app.providers.base import PositionSample, Sample, StaticSample
 from app.worker import IngestionWorker
@@ -68,7 +68,15 @@ def make_worker(provider) -> tuple[IngestionWorker, list[tuple[WindowResult, str
     ) -> None:
         reported.append((result, reason))
 
-    worker._report = spy  # shadow the logger with an observable double
+    # Both seams are database I/O. `_report` is shadowed so a test observes the
+    # write instead of performing it; `_load_previous_positions` is shadowed so
+    # a unit test never needs a database at all — the read it stands in for is
+    # covered against PostGIS in `tests/integration/test_persistence.py`.
+    async def no_history(mmsis: set[int]) -> dict[int, PreviousPosition]:
+        return {}
+
+    worker._report = spy
+    worker._load_previous_positions = no_history
     return worker, reported
 
 
@@ -154,7 +162,7 @@ async def test_the_flush_loop_runs_on_the_configured_interval(app_settings):
 
 async def test_the_flush_loop_survives_a_failed_window(app_settings):
     """One bad window must not take the worker down, nor lose the window."""
-    worker = IngestionWorker(FakeProvider())
+    worker, _ = make_worker(FakeProvider())
     worker.buffer.add_position(position(355693001))
     stop = asyncio.Event()
     attempts = 0
@@ -200,3 +208,29 @@ async def test_validation_runs_before_the_seam_so_nothing_invalid_survives(app_s
     result, _ = reported[0]
     assert [sample.mmsi for sample in result.positions] == [355693001]
     assert result.rejected == {"latitude_out_of_range": 1}
+
+
+async def test_a_vessel_that_teleported_since_the_last_flush_is_flagged(app_settings):
+    """Only the worker knows there *is* a "since the last flush": `process_window` is pure and the window holds nothing from before it."""
+    worker, reported = make_worker(FakeProvider())
+    sample = position(355693001)
+    worker.buffer.add_position(sample)
+
+    async def anchors(mmsis: set[int]) -> dict[int, PreviousPosition]:
+        # An hour earlier and two degrees west: ~219 km in one hour, 118 kn.
+        return {
+            mmsi: PreviousPosition(
+                timestamp=sample.timestamp - timedelta(hours=1),
+                latitude=sample.latitude,
+                longitude=sample.longitude - 2.0,
+            )
+            for mmsi in mmsis
+        }
+
+    worker._load_previous_positions = anchors
+
+    await worker.flush_once()
+
+    result, _ = reported[0]
+    assert len(result.positions) == 1
+    assert result.flagged == {POSITION_JUMP: 1}
