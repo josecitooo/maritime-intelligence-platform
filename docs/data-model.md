@@ -281,12 +281,13 @@ SET name       = COALESCE(EXCLUDED.name,       vessels.name),
     updated_at = GREATEST(EXCLUDED.updated_at, vessels.updated_at)
 ```
 
-Dentro de una misma ventana el buffer solo rellena huecos (`merge_static`), porque
-una parte A del tipo 24 que trae un nombre no debe borrar un tipo de nave aprendido
-de un tipo 5. Entre ventanas la regla tiene que admitir el cambio: `destination` y
-`draught` pertenecen al viaje actual, y congelarlos en la primera detección
-convertiría `vessels` en un museo. Así que un campo que el mensaje **omitó**
-conserva el valor almacenado, y un campo que **trajo** lo reemplaza.
+Dentro de una misma ventana el buffer solo rellena huecos (`merge_static`),
+porque una parte A del tipo 24 que trae un nombre no debe borrar un tipo de
+nave aprendido de un tipo 5. Entre ventanas la regla tiene que admitir el
+cambio: `destination` y `draught` pertenecen al viaje actual, y congelarlos en
+la primera detección convertiría `vessels` en un museo. Así que un campo que el
+mensaje **omitó** conserva el valor almacenado, y un campo que **trajo** lo
+reemplaza.
 
 ### Cómo se escribe una exportación
 

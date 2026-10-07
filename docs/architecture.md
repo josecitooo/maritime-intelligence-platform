@@ -214,7 +214,8 @@ funcionalidad existe para evitar es: filas borradas, una fila del libro diciendo
 **Decisión** — el navegador consulta `/health` (barato) y solo vuelve a pedir
 `/positions/latest` cuando cambia `last_flush`.
 
-**Alternativa** — volver a pedir las posiciones cada 30 minutos con un temporizador.
+**Alternativa** — volver a pedir las posiciones cada 30 minutos con un
+temporizador.
 
 **Rechazada** — un temporizador se desfasa respecto a la ingesta y devuelve
 cargas obsoletas o duplicadas. La detección de cambios convierte la frescura en

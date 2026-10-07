@@ -87,7 +87,8 @@ de reclamar tiempo real.
 ### Requisitos previos
 
 * Python 3.13, Node 24, Docker + Compose
-* Una clave gratuita de AISStream en <https://aisstream.io/account> (login con GitHub)
+* Una clave gratuita de AISStream en <https://aisstream.io/account>
+  (login con GitHub)
 
 ### 1. Configurar
 
