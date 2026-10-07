@@ -20,7 +20,10 @@ from app.db.session import session_scope
 
 BACKEND = Path(__file__).resolve().parents[2]
 
-_TRUNCATE = "TRUNCATE TABLE vessel_positions, vessels, ingestion_runs RESTART IDENTITY"
+_TRUNCATE = (
+    "TRUNCATE TABLE vessel_positions, vessels, ingestion_runs, "
+    "export_runs RESTART IDENTITY"
+)
 
 
 @pytest.fixture(scope="session")
