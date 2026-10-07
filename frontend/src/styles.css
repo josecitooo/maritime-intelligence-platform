@@ -1,0 +1,19 @@
+/* Control-room theme: dark surfaces, low-chroma accents, no neon. */
+:root {
+  color-scheme: dark;
+  --bg: #0a0d11;
+  --text: #d5dce6;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+.stage {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+}
