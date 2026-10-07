@@ -5,10 +5,10 @@ en vivo: una tubería de ingesta automatizada, un almacén operativo
 PostgreSQL/PostGIS, una capa REST con FastAPI y una visualización 3D en el
 navegador de buques, puertos y rutas.
 
-> **Estado: FASE 5 completa** — ingesta, validación, esquema PostGIS y retención
+> **Estado: FASE 6 completa** — ingesta, validación, esquema PostGIS, retención
 > de 7 días con archivo diario en Parquet (con subida opcional a OneDrive a
-> través de `rclone`), funcionando contra datos AIS en vivo. Fuente de datos:
-> `aisstream.io`. Ver [hoja de ruta](#hoja-de-ruta).
+> través de `rclone`) y API REST de solo lectura, funcionando contra datos AIS
+> en vivo. Fuente de datos: `aisstream.io`. Ver [hoja de ruta](#hoja-de-ruta).
 
 ---
 
@@ -54,7 +54,7 @@ correctos y convertidos en métricas. Los paneles existentes muestran
                                        ▼
                             ┌─────────────────────┐
                             │      FastAPI        │
-                            │ /health (FASE 1)    │
+                            │     5 endpoints     │
                             └──────────┬──────────┘
                                        ▼
                     React + TypeScript + Three.js
@@ -79,6 +79,38 @@ de AISHub cuando exista una credencial — ver
 El servicio **no publica SLA ni permite repetición de mensajes**, así que el
 worker se reconecta con backoff y la API expone la frescura de los datos en vez
 de reclamar tiempo real.
+
+---
+
+## API
+
+La API es de solo lectura y las respuestas llevan la frescura encima: además
+del estado, `/health` devuelve `last_flush` y `last_ais_message`, de modo que
+un cliente sabe qué tan viejo es lo que mira en lugar de fiarse de que la hora
+del reloj coincida con la última ingesta.
+
+| Método y ruta | Contenido |
+|---|---|
+| `GET /health` | Liveness, estado de la base y frescura de los datos |
+| `GET /positions/latest` | Última posición de cada buque, de más reciente a menos |
+| `GET /vessels` | Directorio de identidad estática, ordenado por recencia |
+| `GET /vessels/{mmsi}` | Identidad + última posición; 404 si ninguna tabla lo conoce |
+| `GET /vessels/{mmsi}/track` | Trayectoria de más antigua a más reciente (`[]` si no hay) |
+
+Los tres endpoints que devuelven listas aceptan un `limit` acotado — 2000, 1000
+y 5000 por defecto según el recurso. El esquema OpenAPI completo se sirve en
+`/docs`.
+
+**Clave de lectura** — si `API_READ_KEY` está definida, las rutas de datos
+exigen la cabecera `X-API-Key` y responden `401` sin ella; `/health` queda
+siempre accesible porque el healthcheck del contenedor no puede llevar un
+secreto. Sin clave configurada la API es abierta, que es el caso por defecto en
+desarrollo.
+
+Los datos son **near real-time**: la API los sirve cada ventana de ingesta
+(«actualizado cada 30 minutos»), no en el instante en que el transpondedor
+emite. Las decisiones y sus alternativas están en
+[`docs/architecture.md`](docs/architecture.md) §11.
 
 ---
 
@@ -160,8 +192,8 @@ Cambiar la caja delimitada cambia la región bajo análisis — sin tocar códig
 │   │   ├── db/                  engine, session, declarative base
 │   │   ├── providers/base.py    protocolo AISProvider + dataclasses de muestra
 │   │   ├── models/               vessels · vessel_positions · ingestion_runs
-│   │   ├── schemas/              FASE 6
-│   │   ├── api/routers/         FASE 6
+│   │   ├── schemas/             contratos de respuesta (Pydantic)
+│   │   ├── api/routers/         health · positions · vessels
 │   │   ├── ingestion/           FASE 2-4
 │   │   ├── maintenance/         FASE 5
 │   │   └── metrics/             FASE 10-11

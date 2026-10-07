@@ -236,6 +236,62 @@ una única fuente de verdad.
 
 ---
 
+## 11. Lecturas de la API
+
+**Decisión** — la API es de solo lectura y sin estado: cada petición abre su
+propia sesión con `session_scope()` y la cierra al salir, sobre manejadores
+síncronos. No hay caché, ni vista materializada, ni capa de servicio entre el
+router y el ORM.
+
+**Alternativa** — mantener `/positions/latest` en memoria y refrescarlo con un
+temporizador.
+
+**Rechazada** — la caché sería una segunda fuente de verdad con su propio
+reloj. §9 ya fija una única señal de frescura (`last_flush`); leer siempre de
+la base mantiene el dato y la señal en el mismo sitio.
+
+**La ruta caliente** — `/positions/latest` es lo que el mapa pide. Responde con
+`DISTINCT ON (mmsi)` sobre la clave primaria `(mmsi, timestamp)`, una lista
+explícita de columnas y un `ORDER BY timestamp DESC LIMIT`, de modo que «la
+última posición de cada buque» es una propiedad del índice y el tamaño de la
+respuesta lo fija `limit` (2000 por defecto, 10000 máximo). La proyección
+explícita hace que renombrar una columna falle como validación de Pydantic
+antes que vaciar un campo en silencio. El cliente solo la vuelve a pedir cuando
+`/health` cambia `last_flush` (§9): una consulta por ventana de ingesta, no una
+por sondeo del navegador.
+
+**Dos edades, no una** — `/health` devuelve `last_flush` (¿sigue el worker
+comprometiendo ventanas?) y `last_ais_message` (¿sigue llegando algo que
+merezca comprometerse?). Un worker que vuelca ventanas vacías con regularidad
+está vivo sin datos nuevos; uno detenido tiene un mensaje más nuevo que nunca
+avanzará. Un solo número no distingue los dos. `data_freshness_minutes` es la
+edad del segundo, acotada a cero porque el reloj del transpondedor puede ir por
+delante del nuestro, y nulo mientras no haya datos: una base vacía no es una
+base fresca.
+
+**Clave de lectura opcional** — si `API_READ_KEY` está definida, las rutas de
+datos exigen `X-API-Key`, comparada con `hmac.compare_digest`, y responden 401
+con `WWW-Authenticate` en caso contrario. `/health` queda fuera a propósito: el
+healthcheck del contenedor no puede llevar un secreto. Sin clave configurada la
+API queda abierta, que es el caso por defecto del entorno de desarrollo.
+
+**Consecuencia para el healthcheck** — una base inaccesible debe convertirse en
+un 503 rápido y no en una petición que sobreviva al `--timeout=5s` del
+Dockerfile. `build_engine` fija `connect_timeout` (2 s por dirección resuelta);
+sin él el contenedor termina en *unhealthy* con «exceeded timeout» en el log en
+vez del estado degradado que el endpoint está construido para informar.
+
+**La regla sin clave foránea, vista desde el cliente** — `GET /vessels/{mmsi}`
+devuelve 404 solo cuando ninguna de las dos tablas conoce el MMSI;
+`GET /vessels/{mmsi}/track` devuelve `[]` y nunca 404, porque con la clave
+foránea ausente el esquema no puede afirmar que el buque no existe; y
+`GET /vessels` lista únicamente los buques con fila estática, ya que la
+cobertura de identidad es del 52,7 % (`docs/ingestion.md` §2): es un directorio
+de lo que AIS contó, no un censo de lo que se mueve. `VesselDetail.updated_at`
+nulo significa exactamente «nunca reportó datos estáticos», no un hueco.
+
+---
+
 ## Puntos de extensión
 
 | Necesidad futura | Se conecta en |
