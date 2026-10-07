@@ -1,235 +1,245 @@
-# Architecture
+# Arquitectura
 
-Design decisions for V1, each with the alternative that was considered and
-why it was rejected. Decisions are recorded here rather than being inferred
-from code.
+Decisiones de diseño de V1, cada una con la alternativa que se consideró y por
+qué se descartó. Las decisiones se registran aquí en vez de inferirse del código.
 
 ---
 
-## 1. Overall shape
+## 1. Forma general
 
 ```
-AIS stream ─► worker (asyncio) ─► validate ► transform ► dedup ► persist
+flujo AIS ─► worker (asyncio) ─► validar ► transformar ► dedup ► persistir
                                      │
                     ┌────────────────┴───────────────┐
                     ▼                                ▼
-              FastAPI (REST)                  daily maintenance
-                    │                          export ► verify ► delete
-                    ▼                          then upload via rclone
+              FastAPI (REST)                  mantenimiento diario
+                    │                          exportar ► verificar ► borrar
+                    ▼                          y subir con rclone
               React + Three.js
 ```
 
-**Decision** — one Docker image, two commands (`uvicorn app.main:app` and
+**Decisión** — una sola imagen Docker, dos comandos (`uvicorn app.main:app` y
 `python -m app.worker`).
 
-**Alternative** — separate repos/services for API and pipeline.
+**Alternativa** — repos/servicios separados para la API y la tubería.
 
-**Rejected** — the pipeline shares models, config and logging with the API.
-Splitting them would duplicate all of it for no isolation benefit at this size.
-
----
-
-## 2. Data source
-
-**Decision** — `aisstream.io`, a WebSocket stream subscribed by bounding box.
-
-**Alternative** — AISHub.
-
-**Rejected** — AISHub's [terms of use](https://www.aishub.net/join-us) require
-operating a physical AIS receiver and streaming a raw NMEA feed over UDP, with
-quality gates (≥10 vessels average over 7 days, ≥90% uptime, ≤60s downsampling).
-It is not a free public API, and synthesized data is explicitly prohibited.
-Access is therefore unavailable regardless of merit.
-
-**Consequence** — `AISProvider` (`app/providers/base.py`) is a Protocol, so an
-AISHub adapter is one file away if a credential ever exists. No adapter is
-written now: untested code would be dead code.
+**Rechazada** — la tubería comparte modelos, configuración y logging con la
+API. Separarlos duplicaría todo eso sin aportar aislamiento a este tamaño.
 
 ---
 
-## 3. Batch window over per-message writes
+## 2. Fuente de datos
 
-**Decision** — the worker holds one socket open continuously, buffers samples,
-and flushes a batch every `INGESTION_INTERVAL_MINUTES` (30).
+**Decisión** — `aisstream.io`, un flujo WebSocket suscrito por caja delimitada.
 
-**Alternative** — persist every message as it arrives.
+**Alternativa** — AISHub.
 
-**Rejected** — per-message writes couple database load to message rate and make
-`ingestion_runs` accounting meaningless. A batch gives one natural place to
-validate, dedup, count and report.
+**Rechazada** — los [términos de uso](https://www.aishub.net/join-us) de AISHub
+exigen operar un receptor AIS físico y transmitir un feed NMEA crudo por UDP, con
+umbrales de calidad (≥10 buques de media en 7 días, ≥90 % de disponibilidad,
+muestreo reducido a ≤60 s). No es una API pública gratuita, y los datos
+sintetizados están explícitamente prohibidos. El acceso no está disponible,
+independientemente del mérito.
 
-**Mitigation** — aisstream provides no replay, so a crash loses at most one
-window. The buffer is capped (`BUFFER_MAX_MESSAGES`) so memory is bounded.
+**Consecuencia** — `AISProvider` (`app/providers/base.py`) es un Protocol, de
+modo que un adaptador de AISHub está a un archivo de distancia si algún día
+existe una credencial. No se escribe ningún adaptador ahora: código sin probar
+sería código muerto.
 
 ---
 
-## 4. Per-vessel throttling
+## 3. Ventana de lote frente a escrituras por mensaje
 
-**Decision** — keep at most one position per vessel per
-`POSITION_INTERVAL_MINUTES` (default 10).
+**Decisión** — el worker mantiene un socket abierto de forma continua, almacena
+muestras en un buffer y vuelca un lote cada `INGESTION_INTERVAL_MINUTES` (30).
 
-**Consequence** — table growth is a configuration choice, not a code change:
+**Alternativa** — persistir cada mensaje al llegar.
 
-| Interval | rows/vessel/day | 2 000 vessels × 7 days | Approx. size |
+**Rechazada** — las escrituras por mensaje acoplan la carga de la base de datos
+al ritmo de mensajes y vuelven sin sentido la contabilidad de `ingestion_runs`.
+Un lote da un lugar natural donde validar, deduplicar, contar e informar.
+
+**Mitigación** — aisstream no permite repetición de mensajes, así que un fallo
+pierde como mucho una ventana. El buffer está limitado (`BUFFER_MAX_MESSAGES`),
+de modo que la memoria queda acotada.
+
+---
+
+## 4. Limitación por buque
+
+**Decisión** — conservar como máximo una posición por buque cada
+`POSITION_INTERVAL_MINUTES` (10 por defecto).
+
+**Consecuencia** — el crecimiento de la tabla es una decisión de configuración,
+no un cambio de código:
+
+| Intervalo | filas/buque/día | 2 000 buques × 7 días | Tamaño aprox. |
 |---|---|---|---|
-| 5 min | 288 | 4.0 M | ~300 MB ⚠️ |
-| **10 min** | **144** | **2.0 M** | **~150 MB ✓** |
+| 5 min | 288 | 4,0 M | ~300 MB ⚠️ |
+| **10 min** | **144** | **2,0 M** | **~150 MB ✓** |
 | 30 min | 48 | 672 k | ~50 MB ✓ |
 
-The bounding box sets which vessels get counted. The default
-`Gulf + Caribbean` box measures 344 distinct vessels per minute
-(`docs/ingestion.md` §2), so the "2 000 vessels" column is the right order
-of magnitude rather than a guess. Persistence now records the real figure per
-flush in `ingestion_runs.vessels`, so this table becomes measured data as soon
-as enough windows have run — and `POSITION_INTERVAL_MINUTES` stays the single
-lever if growth runs high.
+La caja delimitada decide qué buques se cuentan. La caja `Golfo + Caribe` por
+defecto mide 344 buques distintos por minuto (`docs/ingestion.md` §2), de modo
+que la columna de «2 000 buques» es del orden de magnitud correcto y no una
+conjetura. La persistencia registra ya la cifra real en cada volcado
+(`ingestion_runs.vessels`), así que esta tabla pasa a ser dato medido en cuanto
+corran suficientes ventanas — y `POSITION_INTERVAL_MINUTES` sigue siendo la
+única palanca si el crecimiento se dispara.
 
 ---
 
-## 5. Scheduling
+## 5. Programación
 
-**Decision** — `asyncio` tasks inside the worker: one perpetual consumer, one
-flush loop, one daily maintenance loop.
+**Decisión** — tareas de `asyncio` dentro del worker: un consumidor perpetuo, un
+bucle de volcado y un bucle de mantenimiento diario.
 
-**Alternatives** — APScheduler, Celery, host cron, GitHub Actions.
+**Alternativas** — APScheduler, Celery, cron del host, GitHub Actions.
 
-**Rejected** — Celery needs a broker (Redis) which is pure cost here;
-APScheduler exists to express cron schedules we do not need (fixed intervals);
-GitHub Actions stops scheduling for free repositories after 60 days of
-inactivity, which would silently kill ingestion.
+**Rechazada** — Celery necesita un broker (Redis), que aquí es coste puro;
+APScheduler existe para expresar horarios tipo cron que no necesitamos (intervalos
+fijos); GitHub Actions deja de programar en repositorios gratuitos tras 60 días
+de inactividad, lo que mataría la ingesta en silencio.
 
 ---
 
-## 6. ORM and schema separation
+## 6. Separación entre ORM y esquemas
 
-**Decision** — SQLAlchemy 2.0 typed models + separate Pydantic schemas.
+**Decisión** — modelos tipados de SQLAlchemy 2.0 + esquemas Pydantic separados.
 
-**Alternative** — SQLModel.
+**Alternativa** — SQLModel.
 
-**Rejected** — SQLModel merges ORM and schema layers. This codebase is both an
-ETL target and an API source; keeping them apart means a column rename cannot
-silently change the public contract.
+**Rechazada** — SQLModel funde las capas de ORM y de esquema. Este codebase es a
+la vez destino de un ETL y origen de una API; mantenerlas separadas significa que
+renombrar una columna no puede cambiar en silencio el contrato público.
 
-Migrations are Alembic, with the URL injected from `app.config` so the same
-settings file drives local, test and production. `alembic check` runs as a test,
-so a model that changes without its migration fails the suite rather than the
-first deploy.
+Las migraciones son Alembic, con la URL inyectada desde `app.config` para que el
+mismo archivo de ajustes maneje local, tests y producción. `alembic check` corre
+como test, de modo que un modelo que cambia sin su migración falla la suite y no
+el primer despliegue.
 
 ---
 
 ## 7. PostGIS
 
-**Decision** — enable PostGIS (Supabase ships it) and store `geom` on
+**Decisión** — activar PostGIS (Supabase lo incluye) y guardar `geom` en
 `vessel_positions`.
 
-**Alternative** — btree indexes on `latitude`/`longitude` with hand-rolled
-bounding arithmetic.
+**Alternativa** — índices btree sobre `latitude`/`longitude` con aritmética de
+caja delimitada hecha a mano.
 
-**Rejected** — "vessels within N km of a port" is a proximity query. Doing it
-correctly with plain lat/lon means re-deriving spherical math in every caller.
-PostGIS expresses it once and correctly.
+**Rechazada** — «buques a menos de N km de un puerto» es una consulta de
+proximidad. Hacerla bien con lat/lon planos obliga a re-derivar la matemática
+esférica en cada llamante. PostGIS la expresa una vez y correctamente.
 
-**Consequence** — `geom` is a *generated column* derived from `latitude` and
-`longitude`, so the application never constructs geometry and cannot put a
-point out of step with the row it describes; `persist_window` does not know
-PostGIS is there. See `docs/data-model.md` §2.
+**Consecuencia** — `geom` es una *columna generada* derivada de `latitude` y
+`longitude`, así que la aplicación nunca construye geometría y no puede poner un
+punto desalineado con la fila que describe; `persist_window` ni sabe que PostGIS
+está ahí. Ver `docs/data-model.md` §2.
 
-**One exception, deliberately** — `position_jump` (`docs/ingestion.md` §5)
-measures the gap between a stored position and one still in memory, which no
-SQL can reach because the second row does not exist yet. `haversine_km` in
-`app.ingestion.pipeline` is that single measurement, and an integration test
-runs both it and `ST_Distance` over the same pairs so they cannot drift.
-"In every caller" is still false: there is one function, and it is proved
-against the database.
-
----
-
-## 8. Retention and export ordering
-
-**Decision** — export first, *read the file back*, and only then delete, with
-the ledger row and the `DELETE` in one transaction.
-
-**Alternative** — the obvious `DELETE … WHERE timestamp < NOW() - INTERVAL '7 days'`.
-
-**Rejected on its own** — that statement alone destroys data that was never
-archived.
-
-**How the guard is actually built** — `app/maintenance/export.py` selects the
-period, writes `EXPORT_DIR/vessel_positions_<start>_<end>.parquet`, reopens it
-and counts its rows, and only then runs the `DELETE` and inserts the
-`export_runs` row for that period. The `DELETE`'s rowcount has to equal the
-number of rows in the file, or everything rolls back and the file is removed.
-
-That comparison is the guard, rather than a query looking for a covering
-`export_runs` row before deleting: such a query proves a fact that held at some
-earlier instant, whereas sharing a transaction makes the ledger entry and the
-deletion the same event. A flush committing an old-timestamped position between
-the read and the delete shows up as a mismatch and aborts, instead of becoming
-a row nobody archived. A lock held across the file write would buy the same
-guarantee at the cost of putting ingestion at the mercy of disk latency.
-
-**Consequence** — a failed export leaves neither a ledger row nor a deletion,
-so the period is retried next turn and there is no partial state to repair.
-`docs/data-model.md` §2 records why there is consequently no `status` column.
-
-**One case to know about** — a hard kill between the file write and the commit
-leaves a file no `export_runs` row mentions. Fails safe: its rows are still in
-the table, the next run archives them again, and the duplicate is visible
-because the ledger — not the directory listing — enumerates what was archived.
-A graceful `docker stop` does not reach this state; cancellation rolls the
-transaction back and removes the file.
-
-Deletes run as **one statement, not in chunks**. Chunking only releases locks if
-the chunks commit separately, and separate commits are what the guard forbids:
-a failure after the first chunk would leave a period half-deleted with no ledger
-row. Within one transaction the locks are held to the end either way, so
-chunking would add a pagination loop and buy nothing. The volume is bounded by
-§4 — a day of throttled traffic, order 10⁵ rows, against the index on
-`timestamp` — and that is the figure to re-measure before changing it.
-
-Partitioning is deliberately **not** used: 7 days of throttled `Gulf +
-Caribbean` data does not justify it. Revisit above roughly 10 M rows.
-
-**The upload is optional and never faked.** When `RCLONE_REMOTE` is set the
-worker runs `rclone copy EXPORT_DIR <remote>` after every maintenance turn;
-`rclone` compares size and modification time, so the same call retries an
-earlier failure. When it is not set the archive stays on disk and no log says
-otherwise — the failure this feature exists to prevent is rows deleted, a
-ledger row reading "archived", and the only copy on a disk about to be
-rebuilt. A missing `rclone` binary raises rather than being skipped.
+**Una excepción, deliberada** — `position_jump` (`docs/ingestion.md` §5) mide la
+distancia entre una posición almacenada y otra que todavía está en memoria, a lo
+que ningún SQL alcanza porque la segunda fila aún no existe. `haversine_km` en
+`app.ingestion.pipeline` es esa única medida, y un test de integración ejecuta
+tanto esa como `ST_Distance` sobre los mismos pares para que no puedan
+divergir. «En cada llamante» sigue siendo falso: hay una única función, y está
+probada contra la base de datos.
 
 ---
 
-## 9. Frontend hosting of truth
+## 8. Orden entre retención y exportación
 
-**Decision** — the browser polls `/health` (cheap) and only refetches
-`/positions/latest` when `last_flush` changes.
+**Decisión** — exportar primero, *releer el archivo* y solo entonces borrar, con
+la fila del libro y el `DELETE` en una misma transacción.
 
-**Alternative** — refetch positions every 30 minutes on a timer.
+**Alternativa** — el obvio `DELETE … WHERE timestamp < NOW() - INTERVAL '7 days'`.
 
-**Rejected** — a timer drifts out of phase with ingestion and returns stale or
-duplicate payloads. Change-detection makes freshness a single source of truth.
+**Rechazada por sí sola** — esa instrucción sola destruye datos que nunca se
+archivaron.
+
+**Cómo está construida realmente la guarda** — `app/maintenance/export.py`
+selecciona el periodo, escribe
+`EXPORT_DIR/vessel_positions_<inicio>_<fin>.parquet`, lo reabre y cuenta sus
+filas, y solo entonces ejecuta el `DELETE` e inserta la fila de `export_runs`
+para ese periodo. El recuento del `DELETE` tiene que ser igual al número de filas
+del archivo, o todo se revierte y el archivo se elimina.
+
+Esa comparación es la guarda, en vez de una consulta que busque una fila de
+`export_runs` que cubra el periodo antes de borrar: dicha consulta prueba un
+hecho que valió en algún instante anterior, mientras que compartir la transacción
+vuelve la anotación del libro y la borrada un mismo evento. Que un volcado
+inserte entre la lectura y el borrado una posición con marca de tiempo antigua
+se manifiesta como discrepancia y aborta, en vez de convertirse en una fila que
+nadie archivó. Un lock sostenido durante la escritura del archivo compraría la
+misma garantía al precio de dejar la ingesta a merced de la latencia del disco.
+
+**Consecuencia** — una exportación fallida no deja ni fila en el libro ni
+borrado, así que el periodo se reintenta en el siguiente turno y no hay estado
+parcial que reparar. `docs/data-model.md` §2 explica por qué, por tanto, no
+existe una columna `status`.
+
+**Un caso que conviene conocer** — un *kill* duro entre la escritura del archivo
+y el commit deja un archivo que ninguna fila de `export_runs` menciona. Falla
+seguro: sus filas siguen en la tabla, el siguiente turno las archiva de nuevo, y
+el duplicado es visible porque el libro — no el listado del directorio — es lo
+que enumera lo archivado. Un `docker stop` ordenado no llega a ese estado; la
+cancelación revierte la transacción y elimina el archivo.
+
+Los borrados se ejecutan como **una sola instrucción, no por trozos**. Trocear
+solo libera locks si los trozos hacen commit por separado, y los commits
+separados es exactamente lo que la guarda prohíbe: un fallo tras el primer trozo
+dejaría un periodo a medio borrar sin fila en el libro. Dentro de una misma
+transacción los locks se sostienen hasta el final de todos modos, así que
+trocear añadiría un bucle de paginación sin comprar nada. El volumen está acotado
+por §4 — un día de tráfico limitado, del orden de 10⁵ filas, contra el índice de
+`timestamp` — y esa es la cifra a volver a medir antes de cambiarlo.
+
+**No se usa** deliberadamente la partición: 7 días de datos limitados del
+`Golfo + Caribe` no la justifican. Conviene revisarlo por encima de ~10 M de
+filas.
+
+**La subida es opcional y nunca se finje.** Cuando `RCLONE_REMOTE` está definido
+el worker ejecuta `rclone copy EXPORT_DIR <remote>` tras cada turno de
+mantenimiento; `rclone` compara tamaño y hora de modificación, de modo que la
+misma llamada reintenta un fallo anterior. Cuando no está definido, el archivo
+se queda en disco y ningún log dice lo contrario — el fallo que esta
+funcionalidad existe para evitar es: filas borradas, una fila del libro diciendo
+«archivado» y la única copia en un disco a punto de reconstruirse. Un binario
+`rclone` ausente lanza excepción en vez de omitirse.
 
 ---
 
-## 10. Explicit non-goals for V1
+## 9. Fuente de verdad del frontend
 
-| Excluded | Why |
+**Decisión** — el navegador consulta `/health` (barato) y solo vuelve a pedir
+`/positions/latest` cuando cambia `last_flush`.
+
+**Alternativa** — volver a pedir las posiciones cada 30 minutos con un temporizador.
+
+**Rechazada** — un temporizador se desfasa respecto a la ingesta y devuelve
+cargas obsoletas o duplicadas. La detección de cambios convierte la frescura en
+una única fuente de verdad.
+
+---
+
+## 10. No Objetivos explícitos de V1
+
+| Excluido | Por qué |
 |---|---|
-| AWS (S3, Lambda, Glue, Athena, Kinesis, Redshift) | Out of scope by requirement; the export layer is where V2's data lake plugs in |
-| Celery / Redis / Kafka | No problem in V1 requires them |
-| SSR | The app is a WebGL client; server rendering buys nothing |
-| Table partitioning | Not justified at current volume (see §8) |
-| Weather and ML layers | V2 — but the ingest and schema boundaries are where they attach |
-| `arriving` / `departing` vessel states | Not inferable from `NAVSTAT` + `SOG`; inventing them would violate the data-honesty rule |
+| AWS (S3, Lambda, Glue, Athena, Kinesis, Redshift) | Fuera de alcance por requisito; la capa de exportación es donde se conecta el lago de datos de V2 |
+| Celery / Redis / Kafka | Ningún problema de V1 los requiere |
+| SSR | La app es un cliente WebGL; renderizar en servidor no aporta nada |
+| Partición de tablas | No se justifica con el volumen actual (ver §8) |
+| Capas meteorológicas y de ML | V2 — pero los límites de ingesta y de esquema son donde se acoplan |
+| Estados de buque `arriving` / `departing` | No son inferibles de `NAVSTAT` + `SOG`; inventarlos violaría la regla de honestidad de datos |
 
 ---
 
-## Extension points
+## Puntos de extensión
 
-| Future need | Attaches at |
+| Necesidad futura | Se conecta en |
 |---|---|
-| Second AIS source | implement `AISProvider`, register in the worker |
-| Data lake / AWS | `app/maintenance/export.py` already produces Parquet |
-| Weather overlay | a new provider + a frontend layer; no change to the vessel path |
-| ML features | derived tables fed from `vessel_positions`, read-only for the API |
+| Segunda fuente AIS | implementar `AISProvider`, registrar en el worker |
+| Lago de datos / AWS | `app/maintenance/export.py` ya produce Parquet |
+| Capa meteorológica | un provider nuevo + una capa de frontend; sin cambios en la ruta del buque |
+| Features de ML | tablas derivadas alimentadas desde `vessel_positions`, de solo lectura para la API |
