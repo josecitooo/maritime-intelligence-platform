@@ -5,10 +5,11 @@ en vivo: una tubería de ingesta automatizada, un almacén operativo
 PostgreSQL/PostGIS, una capa REST con FastAPI y una visualización 3D en el
 navegador de buques, puertos y rutas.
 
-> **Estado: FASE 6 completa** — ingesta, validación, esquema PostGIS, retención
+> **Estado: FASE 7 completa** — ingesta, validación, esquema PostGIS, retención
 > de 7 días con archivo diario en Parquet (con subida opcional a OneDrive a
-> través de `rclone`) y API REST de solo lectura, funcionando contra datos AIS
-> en vivo. Fuente de datos: `aisstream.io`. Ver [hoja de ruta](#hoja-de-ruta).
+> través de `rclone`), API REST de solo lectura y base del cliente React
+> (sala de control), funcionando contra datos AIS en vivo. Fuente de datos:
+> `aisstream.io`. Ver [hoja de ruta](#hoja-de-ruta).
 
 ---
 
@@ -146,7 +147,18 @@ uvicorn app.main:app --reload                        # http://localhost:8000/doc
 docker compose up --build                            # API en :8000
 ```
 
-### 4. BD de tests (tests de integración)
+### 4. Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev                              # http://localhost:5173
+```
+
+Necesita la API en marcha (paso 2 o 3). Por defecto habla con
+`http://localhost:8000`; la dirección se cambia en `frontend/.env`.
+
+### 5. BD de tests (tests de integración)
 
 Desde la raíz del repositorio:
 
@@ -179,6 +191,12 @@ Plantilla completa en [`.env.example`](.env.example). Nunca se commitea `.env`.
 
 Cambiar la caja delimitada cambia la región bajo análisis — sin tocar código.
 
+El frontend tiene su propia plantilla en
+[`frontend/.env.example`](frontend/.env.example): `VITE_API_URL` (dirección de
+la API) y `VITE_API_KEY` (clave de lectura opcional). Se leen en el navegador,
+así que van incluidas en el bundle y **ninguna es un secreto**: la clave
+filtra clientes, no protege datos.
+
 ---
 
 ## Estructura del proyecto
@@ -200,7 +218,10 @@ Cambiar la caja delimitada cambia la región bajo análisis — sin tocar códig
 │   ├── alembic/                 migraciones (URL inyectada desde app.config)
 │   ├── tests/                   unit + integración
 │   └── tools/probe_coverage.py  sonda de cobertura de la fuente
-├── frontend/                    FASE 7
+├── frontend/                    FASE 7 · React + Vite
+│   ├── src/api/                 cliente y espejo de los contratos
+│   ├── src/hooks/               sondeo de /health · detección de ventana
+│   └── src/components/          cabecera · escenario · barra de estado
 ├── docs/
 ├── docker-compose.yml           api (el worker se suma en FASE 2)
 ├── docker-compose.test.yml      PostGIS efímero para tests
@@ -216,12 +237,19 @@ cd backend
 ruff check .
 pytest                    # unit + integración
 pytest -m integration     # solo lo que necesita PostGIS
+
+cd ../frontend
+npm run typecheck         # tsc --noEmit
+npm run build             # tsc + vite build
 ```
 
 Los tests son reales: validación de configuración, invariantes de la caja
 delimitada, redacción de logs y — contra un contenedor PostGIS vivo — la ruta
 de escritura (`tests/integration/`). Las fixtures de la tubería de ingesta son
 **frames grabados del flujo en vivo**, no datos inventados.
+
+El cliente se verifica hoy con `typecheck` y `build`; sus tests unitarios
+llegan en FASE 12.
 
 ---
 

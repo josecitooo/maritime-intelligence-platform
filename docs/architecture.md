@@ -221,6 +221,11 @@ temporizador.
 cargas obsoletas o duplicadas. La detección de cambios convierte la frescura en
 una única fuente de verdad.
 
+**Excepción** — una lectura que falló mientras el API estaba caído se repite en
+cuanto `/health` vuelve a responder. Sin esa excepción, la primera caída dejaría
+el mapa fijado en un error hasta recargar la página: ningún cambio de
+`last_flush` puede llegar por una conexión que no se recupera sola.
+
 ---
 
 ## 10. No Objetivos explícitos de V1
