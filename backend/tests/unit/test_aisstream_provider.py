@@ -7,6 +7,7 @@ capture may not happen to contain are covered with explicit frames instead.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -487,3 +488,66 @@ async def test_frames_that_cannot_be_decoded_are_counted_not_raised(app_settings
     assert received == []
     assert provider.frames == 1
     assert provider.decode_errors == 1
+
+
+async def test_region_selection_replaces_the_subscription_in_place(
+    app_settings, probe_frames
+):
+    """An enabled-region change resubscribes on the same socket, not reconnect.
+
+    The worker calls `set_boxes` from its regions task while `samples()` is
+    mid-stream; the provider must replace the subscription on the open
+    connection (aisstream rule: one replacement per second), keep the same
+    connection alive, and treat the confirmation for the replacement as an
+    administrative frame rather than an unusable one.
+    """
+    frames = [json.dumps(frame) for frame in probe_frames[:3]]
+    first = FakeSocket(frames, stream_exc=OSError("bye"))
+    second = FakeSocket(recv_exc=TimeoutError())
+    provider = AISStreamProvider(
+        app_settings,
+        connect=connecting_to(first, second),
+        replacement_min_interval=0.0,
+    )
+    new_boxes = [[[47.0, -10.0], [30.0, 15.0]]]
+
+    received: list[Sample] = []
+    with pytest.raises(SubscriptionRejected):
+        async for sample in provider.samples():
+            received.append(sample)
+            if len(received) == 1:
+                await provider.set_boxes(new_boxes)
+                await asyncio.sleep(0)  # let the replacement driver run now
+
+    assert len(first.sent) == 2, "the replacement should be sent on the first socket"
+    assert json.loads(first.sent[0])["BoundingBoxes"] == app_settings.aisstream_bounding_boxes()
+    assert json.loads(first.sent[1])["BoundingBoxes"] == new_boxes
+    assert len(received) == 3
+    assert provider.region_replacements == 1
+    assert provider.unusable == 0, "the replacement confirmation is not data to count"
+
+
+async def test_an_identical_region_selection_is_a_noop(app_settings, probe_frames):
+    """The worker polls every refresh cadence; identical sets must not resend."""
+    frames = [json.dumps(frame) for frame in probe_frames[:3]]
+    first = FakeSocket(frames, stream_exc=OSError("bye"))
+    second = FakeSocket(recv_exc=TimeoutError())
+    provider = AISStreamProvider(
+        app_settings,
+        connect=connecting_to(first, second),
+        replacement_min_interval=0.0,
+    )
+    boxes = [[[47.0, -10.0], [30.0, 15.0]]]
+
+    received: list[Sample] = []
+    with pytest.raises(SubscriptionRejected):
+        async for sample in provider.samples():
+            received.append(sample)
+            if len(received) == 1:
+                await provider.set_boxes(boxes)
+                await provider.set_boxes(boxes)  # identical selection → must not resend
+                await asyncio.sleep(0)
+
+    assert len(received) == 3
+    assert len(first.sent) == 2, "the identical second request must not send another frame"
+    assert provider.region_replacements == 1

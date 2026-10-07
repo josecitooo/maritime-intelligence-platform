@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import time
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -347,6 +348,27 @@ def backoff_delay(
     return max(base, exponential * (0.5 + 0.5 * jitter()))
 
 
+#: aisstream replaces a subscription on an open connection but enforces at
+#: most one replacement per second per connection. Exceeding it closes the
+#: socket, so a region change waits for the throttle rather than racing it.
+REPLACEMENT_MIN_INTERVAL_SECONDS = 1.0
+
+
+def _is_confirmation(message: bytes | str) -> bool:
+    """True for the subscription-confirmation frames the service sends back.
+
+    The initial confirmation is read by `_await_confirmation`; confirmations
+    for *replaced* subscriptions arrive as ordinary frames inside the stream
+    loop, and are not data. Skipping them here keeps replacements from being
+    counted as unusable frames.
+    """
+    return (
+        b"SubscriptionConfirmation" in message
+        if isinstance(message, bytes)
+        else "SubscriptionConfirmation" in message
+    )
+
+
 class AISStreamProvider:
     """Connects to aisstream.io and yields decoded samples forever.
 
@@ -361,6 +383,7 @@ class AISStreamProvider:
         settings: Settings | None = None,
         *,
         connect: Callable[..., Any] | None = None,
+        replacement_min_interval: float = REPLACEMENT_MIN_INTERVAL_SECONDS,
     ) -> None:
         self._settings = settings or get_settings()
         self._connect = connect if connect is not None else websockets.connect
@@ -368,6 +391,16 @@ class AISStreamProvider:
         self.decode_errors = 0
         self.unusable = 0
         self.reconnects = 0
+        #: The bounding boxes of the subscription currently in effect. `None`
+        #: means "the settings' legacy default", which is what the first
+        #: connection subscribes with until the worker applies the database
+        #: selection.
+        self._boxes: list[list[list[float]]] | None = None
+        self._replacement_requested = asyncio.Event()
+        self._replace_pending = False
+        self._last_replacement = 0.0
+        self._replacement_min_interval = replacement_min_interval
+        self.region_replacements = 0
 
     # AISProvider ---------------------------------------------------------
 
@@ -396,11 +429,35 @@ class AISStreamProvider:
 
     # Internals -----------------------------------------------------------
 
+    @property
+    def boxes(self) -> list[list[list[float]]] | None:
+        """The boxes of the subscription currently in effect (None: settings default)."""
+        return self._boxes
+
+    async def set_boxes(self, boxes: list[list[list[float]]]) -> None:
+        """Request a subscription replacement with `boxes`.
+
+        The change lands on the next open connection as soon as the one-per-
+        second throttle allows; the latest request wins, and an identical
+        request is a no-op. The worker calls this when the enabled region set
+        in `tracked_regions` changed.
+        """
+        if boxes == self._boxes:
+            return
+        self._boxes = boxes
+        self._replace_pending = True
+        self._replacement_requested.set()
+
     def _subscription(self) -> str:
+        selected = (
+            self._boxes
+            if self._boxes is not None
+            else self._settings.aisstream_bounding_boxes()
+        )
         return json.dumps(
             {
                 "APIKey": self._settings.aisstream_api_key,
-                "BoundingBoxes": self._settings.aisstream_bounding_boxes(),
+                "BoundingBoxes": selected,
                 "FilterMessageTypes": list(self._settings.subscribed_message_types),
             }
         )
@@ -413,25 +470,65 @@ class AISStreamProvider:
             max_size=2**21,
         ) as socket:
             await socket.send(self._subscription())
+            # A replacement requested while disconnected was already applied:
+            # `_subscription` above used the latest boxes. Clearing the event
+            # prevents that stale request from triggering a redundant second
+            # send on the freshly-reopened connection.
+            self._replace_pending = False
+            self._replacement_requested.clear()
+            self._last_replacement = time.monotonic()
             await self._await_confirmation(socket)
             log.info(
                 "aisstream subscription accepted",
                 extra={"message_types": ",".join(self._settings.subscribed_message_types)},
             )
-            async for message in socket:
-                self.frames += 1
-                try:
-                    sample = decode_frame(
-                        message, source=self.name, received_at=datetime.now(UTC)
-                    )
-                except ValueError as exc:
-                    self.decode_errors += 1
-                    log.debug("skipping undecodable frame", extra={"reason": str(exc)})
-                    continue
-                if sample is None:
-                    self.unusable += 1
-                    continue
-                yield sample
+            driver = asyncio.create_task(self._drive_replacements(socket))
+            try:
+                async for message in socket:
+                    self.frames += 1
+                    if _is_confirmation(message):
+                        log.debug("aisstream subscription replacement confirmed")
+                        continue
+                    try:
+                        sample = decode_frame(
+                            message, source=self.name, received_at=datetime.now(UTC)
+                        )
+                    except ValueError as exc:
+                        self.decode_errors += 1
+                        log.debug("skipping undecodable frame", extra={"reason": str(exc)})
+                        continue
+                    if sample is None:
+                        self.unusable += 1
+                        continue
+                    yield sample
+            finally:
+                driver.cancel()
+                await asyncio.gather(driver, return_exceptions=True)
+
+    async def _drive_replacements(self, socket: Any) -> None:
+        """Push pending region changes to the wire, at most one per second.
+
+        The initial subscription is a "send once" because a box change is
+        rare; rather than checking a flag on every frame, this task waits on
+        the event and sends exactly when the throttle allows. A second change
+        arriving while the first waits simply overwrites `_boxes`, and the
+        replacement frame carries the newest selection — replace semantics,
+        not merge.
+        """
+        while True:
+            await self._replacement_requested.wait()
+            self._replacement_requested.clear()
+            grace = self._replacement_min_interval - (time.monotonic() - self._last_replacement)
+            if grace > 0:
+                await asyncio.sleep(grace)
+            await socket.send(self._subscription())
+            self._last_replacement = time.monotonic()
+            self._replace_pending = False
+            self.region_replacements += 1
+            log.debug(
+                "aisstream subscription replaced",
+                extra={"boxes": len(self._boxes or [])},
+            )
 
     async def _await_confirmation(self, socket: Any) -> None:
         """Wait for `SubscriptionConfirmation`, or fail permanently.

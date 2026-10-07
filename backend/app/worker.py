@@ -1,12 +1,15 @@
 """Ingestion worker: consume the AIS stream, buffer it, flush on a cadence.
 
-Four concerns, four tasks:
+Four concerns stay, five tasks run:
 
 * `_consume` reads the provider's samples into the buffer. It performs no
   database I/O — aisstream drops messages when reading stalls.
 * `_flush_loop` closes a window every `INGESTION_INTERVAL_MINUTES`.
 * `_maintenance_loop` archives and prunes every `MAINTENANCE_INTERVAL_MINUTES`.
   That is what turns "keep 7 days" from a wish into an enforced window.
+* `_regions_loop` reads the enabled region set from `tracked_regions` and
+  replaces the stream subscription when it changed, so a region the user
+  enables shows up without restarting anything.
 * `run` supervises them and guarantees a clean shutdown flush, so a `docker
   stop` does not silently throw away up to 30 minutes of data.
 
@@ -22,6 +25,7 @@ import signal
 from datetime import UTC, datetime
 
 from app.config import Settings, get_settings
+from app.db.session import session_scope
 from app.ingestion.buffer import SampleBuffer
 from app.ingestion.persistence import load_previous_positions, persist_window
 from app.ingestion.pipeline import PreviousPosition, WindowResult, process_window
@@ -30,6 +34,7 @@ from app.maintenance.export import export_and_prune
 from app.maintenance.onedrive import upload
 from app.providers.aisstream import AISStreamProvider, SubscriptionRejected
 from app.providers.base import AISProvider, PositionSample
+from app.regions import bounding_boxes, fetch_enabled
 
 log = get_logger(__name__)
 
@@ -38,7 +43,7 @@ RETRY_BACKOFF_CAP_SECONDS = 300.0
 
 
 class IngestionWorker:
-    """Owns the buffer and the three background loops."""
+    """Owns the buffer and the four background loops."""
 
     def __init__(
         self,
@@ -83,9 +88,13 @@ class IngestionWorker:
             self._maintenance_loop(stop, interval_seconds=maintenance),
             name="maintenance-loop",
         )
+        regions = asyncio.create_task(
+            self._regions_loop(stop, interval_seconds=self.settings.region_refresh_seconds),
+            name="regions-loop",
+        )
         waiter = asyncio.create_task(stop.wait(), name="stop-waiter")
 
-        tasks = {consumer, flusher, maintainer, waiter}
+        tasks = {consumer, flusher, maintainer, regions, waiter}
         done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in tasks:
             task.cancel()
@@ -232,6 +241,42 @@ class IngestionWorker:
                 return
             except TimeoutError:
                 pass
+
+    async def _regions_loop(self, stop: asyncio.Event, *, interval_seconds: float) -> None:
+        """Mirror the enabled region set onto the wire, first turn on boot.
+
+        aisstream replaces a subscription on an open connection, so a region
+        change is one frame rather than a reconnect. The database is the
+        source of truth and this task only relays it; a failure is logged and
+        the previous selection stays in effect until the next turn — it is
+        never fatal, unlike a rejected *initial* subscription.
+        """
+        while True:
+            try:
+                await self._refresh_regions()
+            except Exception:
+                log.exception("region refresh failed; holding the previous selection")
+
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=interval_seconds)
+                return
+            except TimeoutError:
+                pass
+
+    async def _refresh_regions(self) -> None:
+        def load() -> tuple[list[list[list[float]]], list[str]]:
+            with session_scope() as session:
+                selected = fetch_enabled(session)
+            return bounding_boxes(selected), [row.name for row in selected]
+
+        boxes, names = await asyncio.to_thread(load)
+        if boxes == self.provider.boxes:
+            return
+        await self.provider.set_boxes(boxes)
+        log.info(
+            "region selection applied",
+            extra={"regions": ",".join(names), "boxes": len(boxes)},
+        )
 
     # ── Hooks ──────────────────────────────────────────────────────────
 
