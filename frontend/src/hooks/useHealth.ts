@@ -16,7 +16,8 @@ export const HEALTH_POLL_MS = 30_000
 /** What the status pill shows, derived from the health query alone. */
 export type ApiState = 'connecting' | 'ok' | 'degraded' | 'unreachable'
 
-type HealthQuery = ReturnType<typeof useHealth>
+/** The health query's shape, named once so the other hooks can take it. */
+export type HealthQuery = ReturnType<typeof useHealth>
 
 /**
  * Collapse the query into the four states the UI can be in.
