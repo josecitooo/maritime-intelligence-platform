@@ -11,7 +11,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ApiError, fetchHealth } from '../api/client'
 
 /** One liveness round trip every 30 s: cheap, and far below any load concern. */
-export const HEALTH_POLL_MS = 30_000
+const HEALTH_POLL_MS = 30_000
 
 /** What the status pill shows, derived from the health query alone. */
 export type ApiState = 'connecting' | 'ok' | 'degraded' | 'unreachable'

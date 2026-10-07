@@ -19,7 +19,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchLatestPositions } from '../api/client'
 import type { HealthQuery } from './useHealth'
 
-export const POSITIONS_KEY = ['positions', 'latest'] as const
+const POSITIONS_KEY = ['positions', 'latest'] as const
 
 /** Reads the newest position per vessel. Fetches once, then waits to be told. */
 export function useLatestPositions() {
