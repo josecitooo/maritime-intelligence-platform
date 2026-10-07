@@ -29,6 +29,12 @@ services:
       context: ./backend
     image: maritime-backend:dev
     command: python -m app.worker
+    # The image's healthcheck curls :8000, which only `api` serves, so the
+    # worker would sit reported-unhealthy while ingesting perfectly well.
+    # Its real liveness signal is `last_flush` in `GET /health`: a row in
+    # `ingestion_runs` every window, whether or not anything moved.
+    healthcheck:
+      disable: true
     env_file:
       - path: .env
         required: false
