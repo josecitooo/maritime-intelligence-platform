@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from app.models.export_run import ExportRun
 from app.models.ingestion_run import IngestionRun
+from app.models.region import TrackedRegion
 from app.models.vessel import Vessel, VesselPosition
 
-__all__ = ["ExportRun", "IngestionRun", "Vessel", "VesselPosition"]
+__all__ = ["ExportRun", "IngestionRun", "TrackedRegion", "Vessel", "VesselPosition"]

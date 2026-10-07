@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     min_lon: float = Field(default=-98.0, ge=-180.0, le=180.0)
     max_lon: float = Field(default=-59.0, ge=-180.0, le=180.0)
 
+    #: How often the worker re-reads `tracked_regions` and, when the enabled
+    #: set changed, asks the provider to replace the subscription. Aisstream
+    #: replaces a subscription on an open connection, so a region change never
+    #: costs a reconnect — this cadence only bounds how long a change waits.
+    region_refresh_seconds: int = Field(default=30, ge=5, le=3600)
+
     # ── Database ───────────────────────────────────────────────────────
     database_url: str = "postgresql+psycopg://maritime:maritime@localhost:5432/maritime"
 
@@ -92,6 +98,11 @@ class Settings(BaseSettings):
     # ── API ────────────────────────────────────────────────────────────
     cors_origins: list[str] = Field(default_factory=lambda: list(_DEFAULT_CORS))
     api_read_key: str = ""
+    #: Guards `PUT /regions` and nothing else. Unset means writes are *off*,
+    #: not open — flipping what the stream is asked about deserves a key just
+    #: like the one the data reads demand, and a demo with no key configured
+    #: keeps the safe behaviour.
+    api_write_key: str = ""
 
     # ── Validators ─────────────────────────────────────────────────────
 
@@ -147,6 +158,10 @@ class Settings(BaseSettings):
     @property
     def auth_required(self) -> bool:
         return bool(self.api_read_key)
+
+    @property
+    def write_auth_required(self) -> bool:
+        return bool(self.api_write_key)
 
     def aisstream_bounding_boxes(self) -> list[list[list[float]]]:
         """Bounding boxes in aisstream.io shape: a **list of boxes**.
