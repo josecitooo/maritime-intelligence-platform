@@ -137,6 +137,7 @@ Full template in [`.env.example`](.env.example). Never commit `.env`.
 | `RETENTION_DAYS` | `7` | Operational window before export + delete |
 | `INGESTION_INTERVAL_MINUTES` | `30` | Flush cadence = "updated every N minutes" |
 | `POSITION_INTERVAL_MINUTES` | `10` | Per-vessel throttle; controls table growth |
+| `MAINTENANCE_INTERVAL_MINUTES` | `1440` | How often the archive is written and old rows pruned |
 | `RCLONE_REMOTE` | — | Enables the OneDrive upload step |
 
 Changing the bounding box changes the region under analysis — no code change.

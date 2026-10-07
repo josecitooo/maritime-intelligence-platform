@@ -1,11 +1,13 @@
 """Ingestion worker: consume the AIS stream, buffer it, flush on a cadence.
 
-Three concerns, three tasks:
+Four concerns, four tasks:
 
 * `_consume` reads the provider's samples into the buffer. It performs no
   database I/O — aisstream drops messages when reading stalls.
 * `_flush_loop` closes a window every `INGESTION_INTERVAL_MINUTES`.
-* `run` supervises both and guarantees a clean shutdown flush, so a `docker
+* `_maintenance_loop` archives and prunes every `MAINTENANCE_INTERVAL_MINUTES`.
+  That is what turns "keep 7 days" from a wish into an enforced window.
+* `run` supervises them and guarantees a clean shutdown flush, so a `docker
   stop` does not silently throw away up to 30 minutes of data.
 
 Every window is reported, including an empty one. That is deliberate: a
@@ -24,6 +26,8 @@ from app.ingestion.buffer import SampleBuffer
 from app.ingestion.persistence import load_previous_positions, persist_window
 from app.ingestion.pipeline import PreviousPosition, WindowResult, process_window
 from app.logging import get_logger, setup_logging
+from app.maintenance.export import export_and_prune
+from app.maintenance.onedrive import upload
 from app.providers.aisstream import AISStreamProvider, SubscriptionRejected
 from app.providers.base import AISProvider, PositionSample
 
@@ -34,7 +38,7 @@ RETRY_BACKOFF_CAP_SECONDS = 300.0
 
 
 class IngestionWorker:
-    """Owns the buffer and the two background loops."""
+    """Owns the buffer and the three background loops."""
 
     def __init__(
         self,
@@ -56,6 +60,7 @@ class IngestionWorker:
         stop: asyncio.Event,
         *,
         flush_interval_seconds: float | None = None,
+        maintenance_interval_seconds: float | None = None,
     ) -> None:
         """Run until `stop` is set or a task fails.
 
@@ -66,24 +71,30 @@ class IngestionWorker:
         interval = flush_interval_seconds
         if interval is None:
             interval = self.settings.ingestion_interval_minutes * 60
+        maintenance = maintenance_interval_seconds
+        if maintenance is None:
+            maintenance = self.settings.maintenance_interval_minutes * 60
 
         consumer = asyncio.create_task(self._consume(), name="ais-consumer")
         flusher = asyncio.create_task(
             self._flush_loop(stop, interval_seconds=interval), name="flush-loop"
         )
+        maintainer = asyncio.create_task(
+            self._maintenance_loop(stop, interval_seconds=maintenance),
+            name="maintenance-loop",
+        )
         waiter = asyncio.create_task(stop.wait(), name="stop-waiter")
 
-        done, _pending = await asyncio.wait(
-            {consumer, flusher, waiter}, return_when=asyncio.FIRST_COMPLETED
-        )
-        for task in (consumer, flusher, waiter):
+        tasks = {consumer, flusher, maintainer, waiter}
+        done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(consumer, flusher, waiter, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
         failure = next(
             (
                 task.exception()
-                for task in (consumer, flusher)
+                for task in (consumer, flusher, maintainer)
                 if task in done and not task.cancelled() and task.exception() is not None
             ),
             None,
@@ -124,6 +135,35 @@ class IngestionWorker:
         self.last_flush = started
         return result
 
+    async def run_maintenance(self) -> None:
+        """Archive and prune, then hand the archive to rclone if one is set.
+
+        The export runs every turn even when there is nothing to export: a
+        cutoff with no rows past it is one query and no file. The upload runs
+        even when this turn exported nothing, because `rclone copy` skips what
+        it already has — which is what makes this the retry for an earlier
+        failure as well as the delivery of a new one.
+
+        With no `RCLONE_REMOTE` the archive simply stays on disk, and nothing
+        is logged about it: claiming otherwise would be the fiction this
+        feature exists to avoid.
+        """
+        await asyncio.to_thread(export_and_prune, self.settings)
+
+        if not self.settings.rclone_remote:
+            return
+
+        await asyncio.to_thread(
+            upload, self.settings.export_dir, self.settings.rclone_remote
+        )
+        log.info(
+            "archive uploaded",
+            extra={
+                "remote": self.settings.rclone_remote,
+                "export_dir": str(self.settings.export_dir),
+            },
+        )
+
     # ── Tasks ──────────────────────────────────────────────────────────
 
     async def _consume(self) -> None:
@@ -160,6 +200,38 @@ class IngestionWorker:
             else:
                 failures = 0
                 delay = interval_seconds
+
+    async def _maintenance_loop(
+        self, stop: asyncio.Event, *, interval_seconds: float
+    ) -> None:
+        """Maintain, sleep, maintain — with the first turn on boot, not after a wait.
+
+        Running first matters: a container restarted more often than
+        `MAINTENANCE_INTERVAL_MINUTES` would otherwise never archive anything,
+        and the table would grow past its window through no fault of the data.
+
+        Deliberately without the flush loop's backoff. A missed maintenance
+        window costs nothing — the rows are still in the table — and
+        hammering a permanent failure (a full disk, an unreachable remote)
+        every few minutes would be noise rather than resilience.
+        """
+        while True:
+            try:
+                await self.run_maintenance()
+            except Exception:
+                log.exception(
+                    "maintenance failed; the period waits for the next turn",
+                    extra={
+                        "export_dir": str(self.settings.export_dir),
+                        "remote": self.settings.rclone_remote or None,
+                    },
+                )
+
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=interval_seconds)
+                return
+            except TimeoutError:
+                pass
 
     # ── Hooks ──────────────────────────────────────────────────────────
 
@@ -263,6 +335,7 @@ async def _amain() -> None:
             "bbox": settings.bbox,
             "flush_minutes": settings.ingestion_interval_minutes,
             "position_interval_minutes": settings.position_interval_minutes,
+            "maintenance_minutes": settings.maintenance_interval_minutes,
         },
     )
 

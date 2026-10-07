@@ -7,6 +7,7 @@ real interval — the scheduling policy itself has one focused test.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
@@ -68,15 +69,19 @@ def make_worker(provider) -> tuple[IngestionWorker, list[tuple[WindowResult, str
     ) -> None:
         reported.append((result, reason))
 
-    # Both seams are database I/O. `_report` is shadowed so a test observes the
-    # write instead of performing it; `_load_previous_positions` is shadowed so
-    # a unit test never needs a database at all — the read it stands in for is
-    # covered against PostGIS in `tests/integration/test_persistence.py`.
+    # Three seams do database I/O, and a unit test performs none of it. The
+    # spy lets a test observe the write the flush performs; the other two
+    # stand in for reads and for archiving, both of which are covered against
+    # PostGIS in `tests/integration/`.
     async def no_history(mmsis: set[int]) -> dict[int, PreviousPosition]:
         return {}
 
+    async def no_maintenance() -> None:
+        return None
+
     worker._report = spy
     worker._load_previous_positions = no_history
+    worker.run_maintenance = no_maintenance
     return worker, reported
 
 
@@ -234,3 +239,80 @@ async def test_a_vessel_that_teleported_since_the_last_flush_is_flagged(app_sett
     result, _ = reported[0]
     assert len(result.positions) == 1
     assert result.flagged == {POSITION_JUMP: 1}
+
+
+async def test_maintenance_runs_on_boot_before_it_waits(app_settings):
+    """A container restarted more often than the interval must still archive."""
+    worker, _ = make_worker(FakeProvider())
+    calls: list[None] = []
+
+    async def maintenance() -> None:
+        calls.append(None)
+
+    worker.run_maintenance = maintenance
+    stop = asyncio.Event()
+    stop.set()
+
+    await worker._maintenance_loop(stop, interval_seconds=3600)
+
+    assert len(calls) == 1
+
+
+async def test_a_failed_maintenance_turn_is_logged_and_retried(app_settings, caplog):
+    """Nothing is lost by waiting for the next turn: the rows are still in the table."""
+    worker, _ = make_worker(FakeProvider())
+    attempts = 0
+    stop = asyncio.Event()
+
+    async def maintenance() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("disk full")
+        stop.set()
+
+    worker.run_maintenance = maintenance
+
+    with caplog.at_level(logging.ERROR):
+        await worker._maintenance_loop(stop, interval_seconds=0.01)
+
+    assert attempts == 2
+    assert "maintenance failed" in caplog.text
+
+
+async def test_no_upload_is_attempted_when_no_remote_is_configured(
+    app_settings, monkeypatch
+):
+    """A directory nobody asked to sync is a directory, not an integration."""
+    worker = IngestionWorker(FakeProvider(), settings=app_settings)
+    exported: list[object] = []
+    uploaded: list[tuple[object, str]] = []
+
+    monkeypatch.setattr(
+        "app.worker.export_and_prune", lambda settings: exported.append(settings)
+    )
+    monkeypatch.setattr(
+        "app.worker.upload",
+        lambda directory, remote: uploaded.append((directory, remote)),
+    )
+
+    await worker.run_maintenance()
+
+    assert len(exported) == 1
+    assert uploaded == []
+
+
+async def test_the_archive_is_pushed_to_the_configured_remote(app_settings, monkeypatch):
+    app_settings.rclone_remote = "institutional:/Maritime"
+    worker = IngestionWorker(FakeProvider(), settings=app_settings)
+    uploaded: list[tuple[object, str]] = []
+
+    monkeypatch.setattr("app.worker.export_and_prune", lambda settings: None)
+    monkeypatch.setattr(
+        "app.worker.upload",
+        lambda directory, remote: uploaded.append((directory, remote)),
+    )
+
+    await worker.run_maintenance()
+
+    assert uploaded == [(app_settings.export_dir, "institutional:/Maritime")]

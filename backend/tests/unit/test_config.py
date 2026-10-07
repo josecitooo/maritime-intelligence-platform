@@ -137,6 +137,13 @@ def test_retention_must_be_at_least_one_day():
         make(retention_days=0)
 
 
+def test_maintenance_is_daily_and_cannot_be_set_to_never_run():
+    """`0` would turn the interval into a busy loop against the database."""
+    assert make().maintenance_interval_minutes == 1440
+    with pytest.raises(ValidationError):
+        make(maintenance_interval_minutes=0)
+
+
 def test_bbox_geometry_helpers():
     """Gulf + Caribbean: lat 8..31 (23°), lon -98..-59 (39°)."""
     settings = make()

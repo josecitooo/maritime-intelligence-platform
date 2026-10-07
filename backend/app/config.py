@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     export_dir: Path = Path("historical")
     export_csv: bool = False
     rclone_remote: str = ""
+    #: How often old rows are archived and pruned. `1440` is daily, so
+    #: retention is really 7-8 days: the interval is the last day of it.
+    maintenance_interval_minutes: int = Field(default=1440, ge=1, le=10080)
 
     # ── API ────────────────────────────────────────────────────────────
     cors_origins: list[str] = Field(default_factory=lambda: list(_DEFAULT_CORS))
