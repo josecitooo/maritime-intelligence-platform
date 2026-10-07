@@ -225,7 +225,7 @@ filtra clientes, no protege datos.
 ├── docs/
 ├── docker-compose.yml           api (el worker se suma en FASE 2)
 ├── docker-compose.test.yml      PostGIS efímero para tests
-└── .github/workflows/ci.yml     ruff + pytest en cada push/PR
+└── .github/workflows/ci.yml     ruff · alembic check · pytest · build
 ```
 
 ---

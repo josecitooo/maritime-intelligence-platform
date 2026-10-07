@@ -54,5 +54,38 @@ jobs:
       - name: Lint
         run: ruff check .
 
+      # The migration is the artifact that says how the schema is built, so
+      # the database has to be at head before `check` can compare models
+      # against it — the same order documented in README.md.
+      - name: Migrations
+        run: |
+          alembic upgrade head
+          alembic check
+
       - name: Tests
         run: pytest
+
+  frontend:
+    name: frontend build
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      # `npm run build` is `tsc --noEmit && vite build`: the typecheck gate
+      # and the production bundle in one command, as documented in README.md.
+      - name: Build
+        run: npm run build
