@@ -62,9 +62,10 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
 
     Settings are cached, so the cache is cleared around the environment
     change and again on the way out — a key left behind would silently turn
-    the rest of the suite into a wall of 401s.
+    the rest of the suite into a wall of 401s. Empty, not deleted: deleting
+    it would let `.env` put a key back.
     """
-    monkeypatch.delenv("API_READ_KEY", raising=False)
+    monkeypatch.setenv("API_READ_KEY", "")
     get_settings.cache_clear()
     with TestClient(app) as test_client:
         yield test_client

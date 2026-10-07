@@ -39,8 +39,12 @@ def keyed(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 @pytest.fixture()
 def unkeyed(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Explicitly *no* key: the developer's `.env` must not decide this."""
-    monkeypatch.delenv("API_READ_KEY", raising=False)
+    """Explicitly *no* key: the developer's `.env` must not decide this.
+
+    Set to empty rather than deleted — deleting it would hand the decision
+    back to `.env`, which is exactly what this fixture refuses.
+    """
+    monkeypatch.setenv("API_READ_KEY", "")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
