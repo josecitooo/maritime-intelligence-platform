@@ -1,269 +1,278 @@
-# Data model
+# Modelo de datos
 
-The schema the ingestion pipeline writes. Migrations live in
-`backend/alembic/versions/`, models in `backend/app/models/` — and
-`alembic check` (a test) fails if the two ever disagree.
+El esquema que escribe la tubería de ingesta. Las migraciones viven en
+`backend/alembic/versions/`, los modelos en `backend/app/models/` — y
+`alembic check` (un test) falla si alguna vez divergen.
 
-Bring up the test database first: `docker compose -f docker-compose.test.yml
-up -d --wait`.
+Levanta antes la base de datos de tests: `docker compose -f
+docker-compose.test.yml up -d --wait`.
 
 ---
 
-## 1. The tables
+## 1. Las tablas
 
-| Table | One row per | Growth |
+| Tabla | Una fila por | Crecimiento |
 |---|---|---|
-| `vessels` | MMSI that has reported static data | ≈ distinct vessels in the bounding box |
-| `vessel_positions` | MMSI × message time | ≈ vessels × 144/day (`POSITION_INTERVAL_MINUTES` = 10) |
-| `ingestion_runs` | closed flush | 48/day, empty windows included |
-| `export_runs` | archived period | 1/day at `MAINTENANCE_INTERVAL_MINUTES` = 1440 |
+| `vessels` | MMSI que ha reportado datos estáticos | ≈ buques distintos en la caja delimitada |
+| `vessel_positions` | MMSI × hora del mensaje | ≈ buques × 144/día (`POSITION_INTERVAL_MINUTES` = 10) |
+| `ingestion_runs` | volcado cerrado | 48/día, ventanas vacías incluidas |
+| `export_runs` | periodo archivado | 1/día con `MAINTENANCE_INTERVAL_MINUTES` = 1440 |
 
-`ports` and `port_activity` arrive with FASE 10.
+`ports` y `port_activity` llegan con la FASE 10.
 
 ### `vessels`
 
-| Column | Type | Notes |
+| Columna | Tipo | Notas |
 |---|---|---|
-| `mmsi` | int, PK | assigned by AIS, never by a sequence (`autoincrement=False`) |
-| `name`, `callsign` | text | `NULL` when the source did not report it |
-| `imo` | int | `0` decoded to `NULL` at the adapter |
+| `mmsi` | int, PK | asignado por AIS, nunca por una secuencia (`autoincrement=False`) |
+| `name`, `callsign` | text | `NULL` cuando la fuente no lo reportó |
+| `imo` | int | `0` se decodifica a `NULL` en el adaptador |
 | `ship_type` | smallint | AIS `Type`; `0` → `NULL` |
-| `length_m`, `width_m` | smallint | `A + B` and `C + D`; **both** halves required |
-| `draught_m` | float | AIS `draught` in metres; `0` → `NULL` |
-| `destination` | text | AIS `DEST`; blank decodes to `NULL`, and the source leaves it empty surprisingly often |
-| `eta` | text | `MM-DD HH:MM` — **no year**, so it is not parsed |
+| `length_m`, `width_m` | smallint | `A + B` y `C + D`; se requieren **ambas** mitades |
+| `draught_m` | float | `draught` de AIS en metros; `0` → `NULL` |
+| `destination` | text | `DEST` de AIS; en blanco se decodifica a `NULL`, y la fuente lo deja vacío con sorprendente frecuencia |
+| `eta` | text | `MM-DD HH:MM` — **sin año**, por eso no se parsea |
 | `source` | text | not null |
-| `updated_at` | timestamptz | `GREATEST` of the two observations, so an out-of-order frame cannot age it backwards |
+| `updated_at` | timestamptz | `GREATEST` de las dos observaciones, de modo que un frame fuera de orden no puede envejecerlo hacia atrás |
 
 ### `vessel_positions`
 
-Primary key `(mmsi, timestamp)`.
+Clave primaria `(mmsi, timestamp)`.
 
-| Column | Type | Notes |
+| Columna | Tipo | Notas |
 |---|---|---|
-| `mmsi`, `timestamp` | int, timestamptz | the key |
-| `latitude`, `longitude` | float | the decoder's values — the only source of truth for geometry |
-| `sog`, `cog` | float | knots / degrees; sentinels already `NULL` |
-| `heading`, `rot`, `nav_status` | smallint | sentinels already `NULL`; `nav_status = 15` is **kept** and surfaces as unknown |
-| `ship_name` | text | from the position message when the type carries one |
-| `flags` | text[] | not null, **no default** — `[]` when the row is believed, see §2 |
-| `geom` | geography(point, 4326) | **generated**, see §2 |
+| `mmsi`, `timestamp` | int, timestamptz | la clave |
+| `latitude`, `longitude` | float | los valores del decodificador — la única fuente de verdad de la geometría |
+| `sog`, `cog` | float | nudos / grados; los centinelas ya están a `NULL` |
+| `heading`, `rot`, `nav_status` | smallint | centinelas ya a `NULL`; `nav_status = 15` se **conserva** y aparece como desconocido |
+| `ship_name` | text | del mensaje de posición cuando el tipo lo trae |
+| `flags` | text[] | not null, **sin default** — `[]` cuando la fila se da por buena, ver §2 |
+| `geom` | geography(point, 4326) | **generada**, ver §2 |
 
 ### `ingestion_runs`
 
-| Column | Type | Notes |
+| Columna | Tipo | Notas |
 |---|---|---|
-| `id` | int, PK | `Integer`, not `BigInteger` |
-| `window_start` | timestamptz, nullable | `NULL` marks the first window after a start |
-| `window_end` | timestamptz | when the flush ran |
+| `id` | int, PK | `Integer`, no `BigInteger` |
+| `window_start` | timestamptz, nullable | `NULL` marca la primera ventana tras un arranque |
+| `window_end` | timestamptz | cuándo se ejecutó el volcado |
 | `reason` | text | `scheduled` / `shutdown` |
-| `positions`, `statics`, `vessels` | int | what was written |
-| `throttled`, `evicted` | int | the buffer's counters for the same window |
+| `positions`, `statics`, `vessels` | int | lo que se escribió |
+| `throttled`, `evicted` | int | los contadores del buffer para esa misma ventana |
 | `rejected`, `flagged` | jsonb | `reason -> count` (`docs/ingestion.md` §5) |
 
 ### `export_runs`
 
-| Column | Type | Notes |
+| Columna | Tipo | Notas |
 |---|---|---|
 | `id` | int, PK | |
-| `started_at`, `finished_at` | timestamptz | written only when the export succeeded, so the pair never brackets a failure |
-| `period_start` | timestamptz | `MIN(timestamp)` of what was exported — where the archive begins |
-| `period_end` | timestamptz | the cutoff in force, `now - RETENTION_DAYS`; everything below it went |
-| `row_count` | int | rows in the file, and the count the `DELETE` had to match |
-| `file` | text | file name relative to `EXPORT_DIR`; the Parquet is the archive of record. A CSV, when `EXPORT_CSV` is on, shares the file's stem and needs no column of its own |
-| `byte_size` | bigint | size of that Parquet file, so a truncated upload is visible without opening it |
+| `started_at`, `finished_at` | timestamptz | se escriben solo si la exportación tuvo éxito, así que el par nunca encierra un fallo |
+| `period_start` | timestamptz | `MIN(timestamp)` de lo exportado — dónde empieza el archivo |
+| `period_end` | timestamptz | el corte vigente, `now - RETENTION_DAYS`; por debajo de él se fue todo |
+| `row_count` | int | filas del archivo, y el recuento que el `DELETE` tenía que igualar |
+| `file` | text | nombre del archivo relativo a `EXPORT_DIR`; el Parquet es el archivo de referencia. Un CSV, cuando `EXPORT_CSV` está activo, comparte el nombre base y no necesita columna propia |
+| `byte_size` | bigint | tamaño de ese Parquet, para que una subida truncada sea visible sin abrirlo |
 
-The table is a handful of rows a year, so it carries no index beyond its
-primary key and no foreign key to `vessel_positions` — that would be pointing
-at rows the whole purpose of the table is to remove.
+La tabla son unas pocas filas al año, así que no lleva índice más allá de su
+clave primaria ni clave foránea a `vessel_positions` — apuntaría a filas que el
+propósito de la tabla es eliminar.
 
 ---
 
-## 2. Decisions
+## 2. Decisiones
 
-### No foreign key from `vessel_positions.mmsi` to `vessels.mmsi`
+### Sin clave foránea de `vessel_positions.mmsi` a `vessels.mmsi`
 
-**Decision** — `mmsi` is a plain integer with no constraint.
+**Decisión** — `mmsi` es un entero sin restricción.
 
-**Reason** — static data is not guaranteed. The type-24 subscription raised
-identity coverage of positioned vessels from 24.7 % to 52.7 %
-(`docs/ingestion.md` §2), so roughly half the vessels on the map have no
-`vessels` row. An FK would reject exactly the positions the product exists to
-draw.
+**Motivo** — los datos estáticos no están garantizados. La suscripción al tipo 24
+elevó la cobertura de identidad de los buques posicionados del 24,7 % al 52,7 %
+(`docs/ingestion.md` §2), de modo que cerca de la mitad de los buques del mapa no
+tiene fila en `vessels`. Una FK rechazaría exactamente las posiciones que el
+producto existe para dibujar.
 
-**Alternative** — insert a stub `vessels` row for every MMSI seen.
+**Alternativa** — insertar una fila *stub* en `vessels` para cada MMSI visto.
 
-**Rejected** — a stub is an invented record: a row with no name, no type and no
-dimensions, indistinguishable from a vessel whose static data has not arrived
-yet. It would double the table's row count to buy integrity over data we know
-is frequently absent.
+**Rechazada** — un *stub* es un registro inventado: una fila sin nombre, sin tipo
+y sin dimensiones, indistinguible de un buque cuyos datos estáticos aún no han
+llegado. Duplicaría el recuento de filas de la tabla a cambio de integridad
+sobre datos que sabemos que a menudo faltan.
 
-### `geom` is a generated column
+### `geom` es una columna generada
 
-**Decision** —
+**Decisión** —
 `GENERATED ALWAYS AS (ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)::geography) STORED`,
-GiST-indexed.
+indexada con GiST.
 
-**Reason** — the two floats are the only source of truth, so the point cannot
-drift from the row it describes, and `persist_window` never has to know PostGIS
-exists. Its compiled `INSERT` omits `geom`; Postgres refuses any attempt to
-write it.
+**Motivo** — los dos flotantes son la única fuente de verdad, así que el punto no
+puede desviarse de la fila que describe, y `persist_window` nunca necesita saber
+que PostGIS existe. Su `INSERT` compilado omite `geom`; Postgres rechaza
+cualquier intento de escribirlo.
 
-**Alternative** — build the WKT in the application and insert it.
+**Alternativa** — construir el WKT en la aplicación e insertarlo.
 
-**Rejected** — more code, one more failure mode (the point disagreeing with the
-coordinates), and no gain.
+**Rechazada** — más código, un fallo más (el punto en desacuerdo con las
+coordenadas), y ningún beneficio.
 
-`persisted=True` is not cosmetic: without it SQLAlchemy renders no keyword at
-all on PostgreSQL 18+, where `VIRTUAL` becomes the default — and a virtual
-generated column cannot carry the GiST index.
+`persisted=True` no es cosmético: sin él SQLAlchemy no emite ninguna palabra
+clave en PostgreSQL 18+, donde `VIRTUAL` pasa a ser el valor por defecto — y una
+columna generada virtual no puede llevar el índice GiST.
 
-### No CHECK constraints
+### Sin restricciones CHECK
 
-**Decision** — validation happens in `process_window`, which counts rejects
-instead of aborting. The schema declares no range checks.
+**Decisión** — la validación ocurre en `process_window`, que cuenta los
+rechazos en vez de abortar. El esquema no declara comprobaciones de rango.
 
-**Reason** — the same rule that dropped `outside_bbox`
-(`docs/ingestion.md` §5): a check that cannot fire is dead code. Validation
-runs first, so `latitude` out of range never reaches the `INSERT`.
+**Motivo** — la misma regla que eliminó `outside_bbox` (`docs/ingestion.md` §5):
+una comprobación que no puede dispararse es código muerto. La validación corre
+primero, de modo que una `latitude` fuera de rango nunca llega al `INSERT`.
 
-**Alternative** — `CHECK (latitude BETWEEN -90 AND 90)`.
+**Alternativa** — `CHECK (latitude BETWEEN -90 AND 90)`.
 
-**Rejected** — if it ever *did* fire, it would abort the transaction for the
-whole window, losing every good row to one bad one. Counting the reject in
-`ingestion_runs.rejected` reports the same fact without the blast radius.
+**Rechazada** — si alguna vez *se* disparara, abortaría la transacción de la
+ventana entera, perdiendo cada buena fila por culpa de una mala. Contar el
+rechazo en `ingestion_runs.rejected` informa del mismo hecho sin ese radio de
+acción.
 
-### No `status` column on `ingestion_runs`
+### Sin columna `status` en `ingestion_runs`
 
-**Decision** — the run row and the rows it counts are written in one
-transaction.
+**Decisión** — la fila de la ejecución y las filas que cuenta se escriben en una
+misma transacción.
 
-**Reason** — a failed write leaves no row at all. There is nothing claiming
-success, and nothing to keep in step. A failure is a gap in `window_end`
-plus an error in the log.
+**Motivo** — una escritura fallida no deja fila alguna. No hay nada que afirme
+éxito, y nada que mantener en paso. Un fallo es un hueco en `window_end` más un
+error en el log.
 
-**Alternative** — catch the error and insert `status = 'failed'`.
+**Alternativa** — capturar el error e insertar `status = 'failed'`.
 
-**Rejected** — that needs a second transaction to record the failure of the
-first, and it invites the lie the design is built to avoid: a row saying
-`failed` for a window whose positions did land, or `success` for one committed
-without them. "The count and the counted commit together" cannot be wrong.
+**Rechazada** — eso necesita una segunda transacción para registrar el fallo de
+la primera, e invita a la mentira que el diseño está construido para evitar: una
+fila diciendo `failed` para una ventana cuyas posiciones sí se almacenaron, o
+`success` para una que hizo *commit* sin ellas. «Lo contado y su recuento hacen
+*commit* juntos» no puede ser falso.
 
-### No `status` column on `export_runs`
+### Sin columna `status` en `export_runs`
 
-**Decision** — the ledger row and the `DELETE` it authorises are written in one
-transaction, so there is no column recording how an export went.
+**Decisión** — la fila del libro y el `DELETE` que autoriza se escriben en una
+misma transacción, así que no hay columna que registre cómo fue una exportación.
 
-**Reason** — an export that fails leaves neither: no row claiming success, no
-rows removed, nothing half-done to repair. The row is written only after the
-file exists and has been read back, which makes `export_runs` a statement about
-a period that *was* archived rather than an attempt log. `architecture.md` §8
-has the ordering and the rowcount guard that enforce it.
+**Motivo** — una exportación que falla no deja ni lo uno ni lo otro: ni fila que
+afirme éxito, ni filas retiradas, ni nada a medio hacer que reparar. La fila se
+escribe solo después de que el archivo exista y se haya releído, lo que convierte
+a `export_runs` en una afirmación sobre un periodo que *fue* archivado y no en un
+registro de intentos. `architecture.md` §8 tiene el orden y la guarda por
+recuento que lo hacen cumplir.
 
-**Alternative** — record `status = 'failed'` for exports that did not make it.
+**Alternativa** — registrar `status = 'failed'` en las exportaciones que no lo
+consiguieron.
 
-**Rejected** — recording a failure needs a second transaction to report on the
-fate of the first, and the question anyone actually asks ("are these rows still
-in the table?") is answered by looking for them. An enum that can drift from
-reality is worse than a gap in the data.
+**Rechazada** — registrar un fallo necesita una segunda transacción para
+informar del destino de la primera, y la pregunta que cualquiera se hace
+de verdad («¿siguen estas filas en la tabla?») se contesta buscándolas. Un
+enum que puede divergir de la realidad es peor que un hueco en los datos.
 
-### The archive carries `vessel_positions` minus `geom`, declared once
+### El archivo lleva `vessel_positions` sin `geom`, declarado una sola vez
 
-**Decision** — the Parquet and CSV schemas omit `geom`, and are declared as one
-explicit Arrow schema in `app/maintenance/export.py` from which both the
-`SELECT` and the CSV header are derived.
+**Decisión** — los esquemas Parquet y CSV omiten `geom`, y se declaran como un
+único esquema Arrow explícito en `app/maintenance/export.py` del que se derivan
+tanto el `SELECT` como la cabecera del CSV.
 
-**Reason** — `geom` is generated from `latitude` and `longitude` (§2), so the
-archive already holds everything needed to rebuild it, and a copied value is a
-chance for the two to disagree. Deriving the column list from a single
-declaration means a column cannot be added to the `SELECT` and forgotten in the
-file, or the reverse.
+**Motivo** — `geom` se genera a partir de `latitude` y `longitude` (§2), así que
+el archivo ya contiene todo lo necesario para reconstruirla, y copiar el valor
+es una oportunidad para que las dos diverjan. Derivar la lista de columnas de
+una única declaración significa que no se puede añadir una columna al `SELECT` y
+olvidarla en el archivo, ni al revés.
 
-**Alternative** — let pyarrow infer the schema from the first batch of rows.
+**Alternativa** — dejar que pyarrow infiera el esquema a partir del primer lote
+de filas.
 
-**Rejected** — an all-`NULL` column infers as type `null`, and the next day's
-file, where the same column has values, would infer something else. Two archives
-of the same table that will not concatenate is a data-quality bug waiting for a
-quiet day.
+**Rechazada** — una columna toda a `NULL` se infiere como tipo `null`, y el
+archivo del día siguiente, donde esa misma columna sí tiene valores, inferiría
+otra cosa. Dos archivos de la misma tabla que no se pueden concatenar es un bug
+de calidad de datos esperando un día tranquilo.
 
-### No `gap_seconds` column
+### Sin columna `gap_seconds`
 
-It is `window_end - window_start`. Storing a subtraction duplicates data that
-can be read, and a trigger or check to keep the copy in step is the dead-code
-rule again.
+Es `window_end - window_start`. Guardar una resta duplica datos que se pueden
+leer, y un trigger o una comprobación para mantener la copia en paso es la regla
+de código muerto otra vez.
 
-### Per-row `flags`, with no `DEFAULT` on it
+### `flags` por fila, sin `DEFAULT`
 
-**Decision** — `vessel_positions.flags` is `text[] NOT NULL` with no default.
-An empty array means the row is believed; `sog_implausible` and
-`position_jump` record what was wrong but stored. The per-window roll-up in
-`ingestion_runs.flagged` is derived from these rows rather than counted a
-second time, so the two cannot disagree.
+**Decisión** — `vessel_positions.flags` es `text[] NOT NULL` sin default. Un
+array vacío significa que la fila se da por buena; `sog_implausible` y
+`position_jump` registran qué estaba mal pero se almacenó. La agregación por
+ventana en `ingestion_runs.flagged` se deriva de estas filas en vez de contarse
+una segunda vez, de modo que las dos no pueden divergir.
 
-**Reason** — a flag nobody can locate is half a flag. `flagged` says three
-positions in this window were not believed; the column says *which* three,
-which is what the track view will filter on. It arrived with `position_jump`
-(`docs/ingestion.md` §5) — the moment the earlier decision was waiting for.
+**Motivo** — una marca que nadie puede localizar es media marca. `flagged` dice
+que tres posiciones de esta ventana no se creyeron; la columna dice *cuáles* tres,
+que es sobre lo que filtrará la vista de trazas. Llegó con `position_jump`
+(`docs/ingestion.md` §5) — el momento en que la decisión anterior estaba
+esperando.
 
-**Alternative** — keep the aggregate alone, as before.
+**Alternativa** — quedarse solo con el agregado, como antes.
 
-**Rejected** — that was the right call while `sog_implausible` was the only
-flag: a column written by one statement and read by nobody. With a second flag
-and a filter coming, it is read.
+**Rechazada** — era la decisión correcta mientras `sog_implausible` era la única
+marca: una columna escrita por una instrucción y leída por nadie. Con una segunda
+marca y un filtro en camino, se lee.
 
-**Also rejected** — a permanent `DEFAULT '{}'`. The migration borrows one for
-the `ADD COLUMN` so rows written before the rule can exist with no verdict,
-then drops it. A standing default would let an `INSERT` that forgot `flags`
-succeed silently with an empty array, and a column of verdicts is only
-trustworthy if omitting one fails.
+**También rechazada** — un `DEFAULT '{}'` permanente. La migración toma prestado
+uno para el `ADD COLUMN` de modo que las filas escritas antes de la regla puedan
+existir sin veredicto, y después lo elimina. Un default fijo permitiría que un
+`INSERT` que olvidara `flags` tuviera éxito en silencio con un array vacío, y una
+columna de veredictos solo es fiable si omitir uno falla.
 
-### The transport counters are not columns either
+### Los contadores de transporte tampoco son columnas
 
-`frames`, `decode_errors`, `unusable` and `reconnects` are cumulative for the
-process lifetime. In a per-window table they would be the one column that drops
-back to zero on every restart, and their deltas would be wrong across the
-restart boundary. They are reported in the structured log at every window
-close, and `/health` exposes `last_flush` and `data_freshness_minutes` so stream
-health is diagnosable from outside.
+`frames`, `decode_errors`, `unusable` y `reconnects` son acumulativos durante la
+vida del proceso. En una tabla por ventana serían la única columna que vuelve a
+cero en cada reinicio, y sus deltas serían erróneos a través de la frontera del
+reinicio. Se informan en el log estructurado al cerrar cada ventana, y `/health`
+expone `last_flush` y `data_freshness_minutes` para que la salud del flujo sea
+diagnosticable desde fuera.
 
 ---
 
-## 3. How one window is written
+## 3. Cómo se escribe una ventana
 
 ```
-load_previous_positions(mmsis) # one read: where each vessel was last stored
+load_previous_positions(mmsis) # una lectura: dónde estaba cada buque por última vez
         │
         ▼
-process_window(batch, previous)  # pure: rejects and flags, touches nothing
+process_window(batch, previous)  # pura: rechaza y marca, no toca nada
         │
         ▼
-persist_window(result, …)     # one transaction
+persist_window(result, …)     # una transacción
         ├── INSERT … ON CONFLICT DO NOTHING  (mmsi, timestamp)
         ├── INSERT … ON CONFLICT DO UPDATE   (mmsi)
         └── INSERT ingestion_runs
         │
         ▼
-buffer.clear()                # only after the write landed
+buffer.clear()                # solo después de que la escritura haya aterrizado
 ```
 
-* **The write precedes the drain.** If it raises, the samples stay buffered and
-  the next attempt retries the whole window — validation is pure, so the retry
-  reaches the same verdict. The anchor read happens again on that retry too, so
-  it cannot drift while a window waits.
-* **The anchor read is the only thing `process_window` cannot supply.** A
-  window holds what arrived since the last flush; `position_jump` is precisely
-  the claim that the two disagree, so it needs the row that came before. The
-  read runs in a thread for the same reason the write does.
-* **Replaying is a no-op.** `ON CONFLICT DO NOTHING` on the primary key means a
-  replayed window or a crash between write and drain cannot double a track.
-* **The run row is *not* deduplicated.** Two flushes are two events; the second
-  row is the evidence that a retry happened.
-* **An empty window still writes a row.** That is the keepalive that stops an
-  idle Supabase free-tier project from being paused.
-* **The write runs in a thread** (`asyncio.to_thread`) so the consumer keeps
-  reading the socket meanwhile — aisstream drops messages when reads stall.
+* **La escritura precede al vaciado.** Si lanza excepción, las muestras quedan en
+  el buffer y el siguiente intento reintenta la ventana entera — la validación es
+  pura, así que el reintento alcanza el mismo veredicto. La lectura del ancla se
+  repite también en ese reintento, de modo que no puede derivarse mientras una
+  ventana espera.
+* **La lectura del ancla es lo único que `process_window` no puede aportar.** Una
+  ventana contiene lo que llegó desde el último volcado; `position_jump` es
+  precisamente la afirmación de que las dos discrepan, así que necesita la fila
+  que vino antes. La lectura corre en un hilo por la misma razón que la escritura.
+* **Reproducir es un no-op.** `ON CONFLICT DO NOTHING` sobre la clave primaria
+  significa que una ventana reproducida o un fallo entre la escritura y el
+  vaciado no pueden duplicar una traza.
+* **La fila de ejecución *no* se deduplica.** Dos volcados son dos eventos; la
+  segunda fila es la prueba de que hubo un reintento.
+* **Una ventana vacía escribe fila igualmente.** Ese es el *keepalive* que evita
+  que un proyecto gratuito de Supabase inactivo se pause.
+* **La escritura corre en un hilo** (`asyncio.to_thread`) para que el consumidor
+  siga leyendo el socket mientras tanto — aisstream descarta mensajes cuando las
+  lecturas se estancan.
 
-### The identity merge
+### La fusión de identidad
 
 ```sql
 SET name       = COALESCE(EXCLUDED.name,       vessels.name),
@@ -272,73 +281,74 @@ SET name       = COALESCE(EXCLUDED.name,       vessels.name),
     updated_at = GREATEST(EXCLUDED.updated_at, vessels.updated_at)
 ```
 
-Inside one window the buffer only fills blanks (`merge_static`), because a type
-24 part A carrying a name must not wipe a ship type learned from a type 5.
-Across windows the rule has to admit change: `destination` and `draught` belong
-to the current voyage, and freezing them at first sighting would turn `vessels`
-into a museum. So a field the message **omitted** keeps the stored value, a
-field it **carried** replaces it.
+Dentro de una misma ventana el buffer solo rellena huecos (`merge_static`), porque
+una parte A del tipo 24 que trae un nombre no debe borrar un tipo de nave aprendido
+de un tipo 5. Entre ventanas la regla tiene que admitir el cambio: `destination` y
+`draught` pertenecen al viaje actual, y congelarlos en la primera detección
+convertiría `vessels` en un museo. Así que un campo que el mensaje **omitó**
+conserva el valor almacenado, y un campo que **trajo** lo reemplaza.
 
-### How one export is written
+### Cómo se escribe una exportación
 
 ```
-SELECT … WHERE timestamp < cutoff        # the period, in track order
+SELECT … WHERE timestamp < cutoff        # el periodo, en orden de traza
         │
         ▼
-write Parquet (+ CSV when EXPORT_CSV)    # into EXPORT_DIR
+write Parquet (+ CSV cuando EXPORT_CSV)  # en EXPORT_DIR
         │
         ▼
-read it back and count the rows          # a file that cannot be read is not an archive
+releerlo y contar las filas                      # un archivo que no se puede leer no es un archivo
         │
         ▼
-DELETE … WHERE timestamp < cutoff        # rowcount must equal that count, else ↓
-INSERT export_runs                       #   rollback: rows stay, the file is removed
+DELETE … WHERE timestamp < cutoff        # el recuento debe igualar ese número, si no ↓
+INSERT export_runs                       #   rollback: las filas quedan, el archivo se elimina
         │
         ▼
-rclone copy EXPORT_DIR <remote>          # only when RCLONE_REMOTE is set
+rclone copy EXPORT_DIR <remote>          # solo cuando RCLONE_REMOTE está definido
 ```
 
-* **The file precedes the delete and is removed if the delete does not happen**
+* **El archivo precede al borrado y se elimina si el borrado no ocurre**
   (`architecture.md` §8).
-* **The file name is the period** —
-  `vessel_positions_<period_start>_<period_end>.parquet`, in UTC, with colons
-  replaced by hyphens because a name containing `:` is unusable on Windows.
-* **`vessels` and `ingestion_runs` are never pruned.** Only `vessel_positions`
-  grows without bound, and a `vessels` row is the thing the positions are about.
-* **`export_runs` enumerates the archive; the directory does not.** A file no
-  row names is a leftover from a run killed before it could commit: its rows are
-  still in the table and the next run archives them again, so that file is the
-  duplicate rather than the newer one.
+* **El nombre del archivo es el periodo** —
+  `vessel_positions_<period_start>_<period_end>.parquet`, en UTC, con los dos
+  puntos sustituidos por guiones porque un nombre que contiene `:` es inutilizable
+  en Windows.
+* **`vessels` e `ingestion_runs` nunca se depuran.** Solo `vessel_positions` crece
+  sin límite, y una fila de `vessels` es de lo que tratan las posiciones.
+* **`export_runs` enumera el archivo; el directorio no.** Un archivo que ninguna
+  fila nombra es el resto de una ejecución muerta antes de poder confirmar: sus
+  filas siguen en la tabla y la siguiente las archiva de nuevo, de modo que ese
+  archivo es el duplicado y no el más reciente.
 
 ---
 
-## 4. Indexes
+## 4. Índices
 
-| Index | On | Serves |
+| Índice | Sobre | Sirve para |
 |---|---|---|
-| `vessel_positions_pkey` | `(mmsi, timestamp)` | point lookups and one vessel's track, already in time order — which also makes `load_previous_positions`' `DISTINCT ON (mmsi)` a property of the index rather than a sort |
-| `ix_vessel_positions_timestamp` | `(timestamp)` | retention deletes and "everything in the last N minutes" across all vessels — which the PK cannot serve |
-| `idx_vessel_positions_geom` | `gist (geom)` | proximity, e.g. "vessels within 50 km of a port" (`architecture.md` §7) |
+| `vessel_positions_pkey` | `(mmsi, timestamp)` | consultas puntuales y la traza de un buque, ya en orden temporal — lo que también convierte el `DISTINCT ON (mmsi)` de `load_previous_positions` en una propiedad del índice y no en una ordenación |
+| `ix_vessel_positions_timestamp` | `(timestamp)` | borrados de retención y «todo lo de los últimos N minutos» de todos los buques — algo que la PK no puede servir |
+| `idx_vessel_positions_geom` | `gist (geom)` | proximidad, p. ej. «buques a menos de 50 km de un puerto» (`architecture.md` §7) |
 
 ---
 
-## 5. Proving it
+## 5. Cómo se demuestra
 
 ```bash
 docker compose -f docker-compose.test.yml up -d --wait
 cd backend
-alembic upgrade head           # or let the fixture do it
-pytest -m integration          # the tests that need PostGIS
+alembic upgrade head           # o deja que lo haga la fixture
+pytest -m integration          # los tests que necesitan PostGIS
 ```
 
-They assert the things a unit test cannot: every `PositionSample` field
-surviving the round trip, the derived point landing within a metre of the stored
-coordinates, a replay collapsing instead of doubling, an omitted field failing
-to erase a stored one, a half-known hull sum storing `NULL`, the migration
-having not drifted from the models, and — against retention — that the period
-archived is the period pruned, that a failed export removes nothing, and that
-what was written still reads.
+Afirman lo que un test unitario no puede: cada campo de `PositionSample`
+sobreviviendo el viaje de ida y vuelta, el punto derivado cayendo a menos de un
+metro de las coordenadas almacenadas, una reproducción colapsando en vez de
+duplicar, un campo omitido sin borrar el almacenado, un casco a medio conocer
+almacenando `NULL`, la migración sin haberse desviado de los modelos, y — contra
+la retención — que el periodo archivado es el periodo depurado, que una
+exportación fallida no retira nada y que lo escrito sigue pudiéndose leer.
 
-**Nothing skips when the database is missing.** CI provisions the same
-container, and a suite that quietly passes without it has quietly stopped
-testing the write path.
+**Nada se omite cuando falta la base de datos.** CI aprovisiona el mismo
+contenedor, y una suite que pasa discretamente sin él ha dejado discretamente de
+probar la ruta de escritura.
