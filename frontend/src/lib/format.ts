@@ -56,3 +56,32 @@ export function formatBbox(bbox: number[] | null | undefined): string | null {
     `${Math.abs(value).toFixed(1).replace('.', ',')}°${value < 0 ? 'O' : 'E'}`
   return `${lat(minLat)}–${lat(maxLat)} · ${lon(minLon)}–${lon(maxLon)}`
 }
+
+/** `18,4717°N 69,9300°O` — one position, for the inspection panel. */
+export function formatLatLon(latitude: number, longitude: number): string {
+  const lat = `${Math.abs(latitude).toFixed(4).replace('.', ',')}°${latitude < 0 ? 'S' : 'N'}`
+  const lon = `${Math.abs(longitude).toFixed(4).replace('.', ',')}°${longitude < 0 ? 'O' : 'E'}`
+  return `${lat} ${lon}`
+}
+
+const NAV_STATUS: Record<number, string> = {
+  0: 'En marcha por motor',
+  1: 'Fondeado',
+  2: 'Sin gobierno',
+  3: 'Capacidad de maniobra restringida',
+  4: 'Restringido por su calado',
+  5: 'Amarrado',
+  6: 'Varado',
+  7: 'Pesca',
+  8: 'Navegando a vela',
+  15: 'Estado no definido',
+}
+
+/**
+ * A human label for a raw AIS navigational-status code. Codes outside the
+ * well-known set are reported as their number, never invented as a label.
+ */
+export function formatNavStatus(code: number | null | undefined): string {
+  if (code === null || code === undefined) return '—'
+  return NAV_STATUS[code] ?? `Código ${code}`
+}

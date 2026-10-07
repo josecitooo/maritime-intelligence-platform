@@ -3,30 +3,32 @@ import { Header } from './components/Header'
 import { StatusBar } from './components/StatusBar'
 import { useLatestPositions, useSyncPositions } from './hooks/useLatestPositions'
 import { resolveApiState, useHealth } from './hooks/useHealth'
+import { useRegions } from './hooks/useRegions'
 
 /**
- * FASE 7: three rails — header (who answers), stage (the data), status bar
- * (freshness).
+ * FASE 8–9: three rails and the world between them.
  *
- * The order is the design's hierarchy: the maritime world takes the stage
- * from FASE 8 on, the contextual panel joins it in FASE 9, and KPIs and
- * filters come last in FASE 11. Nothing here is a placeholder for those
- * phases; each rail already shows what it exists to show.
+ * The maritime world takes the stage: the globe frames whatever region set
+ * the operator enabled, the fleet renders on it, and the header and status
+ * bar stay thin rails around it. The region catalog serves the header's
+ * summary and the stage's selector from the same query.
  */
 export function App() {
   const health = useHealth()
   const positions = useLatestPositions()
   useSyncPositions(health)
+  const regions = useRegions()
 
   return (
     <div className="app">
-      <Header apiState={resolveApiState(health)} bbox={health.data?.bbox ?? null} />
+      <Header apiState={resolveApiState(health)} regions={regions.data} />
       <main className="stage">
         <DataStage
           health={health.data}
           rows={positions.data}
           isPending={positions.isPending}
           error={positions.error}
+          regions={regions.data}
         />
       </main>
       <StatusBar health={health.data} />

@@ -46,3 +46,13 @@ export interface PositionLatest {
   /** Empty when the row is believed; `sog_implausible` / `position_jump` otherwise. */
   flags: string[]
 }
+
+/** One row of `GET/PUT /regions` — a named box in the monitored-region catalog. */
+export interface Region {
+  name: string
+  enabled: boolean
+  min_lat: number
+  max_lat: number
+  min_lon: number
+  max_lon: number
+}

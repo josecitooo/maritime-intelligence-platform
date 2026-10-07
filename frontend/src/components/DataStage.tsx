@@ -1,30 +1,54 @@
+import { useEffect, useState } from 'react'
 import { ApiError, apiBaseUrl, POSITIONS_LIMIT } from '../api/client'
-import type { HealthResponse, PositionLatest } from '../api/types'
+import type { HealthResponse, PositionLatest, Region } from '../api/types'
 import { formatAgo, formatCount, formatUtc } from '../lib/format'
 import { Globe } from './Globe'
+import type { GlobeFocus } from './Globe'
+import { InspectPanel } from './InspectPanel'
+import { RegionBar } from './RegionBar'
+import { SearchBox } from './SearchBox'
+import { useToggleRegions } from '../hooks/useRegions'
 
 interface DataStageProps {
   health: HealthResponse | undefined
   rows: PositionLatest[] | undefined
   isPending: boolean
   error: unknown
+  regions: Region[] | undefined
+}
+
+const matches = (row: PositionLatest, query: string): boolean => {
+  const needle = query.toLowerCase()
+  if (row.ship_name?.toLowerCase().includes(needle)) return true
+  return String(row.mmsi).includes(needle)
 }
 
 /**
- * The stage: everything the map will not have to say once it can draw it.
+ * The stage: the world (region selection, fleet, search, inspection) and the
+ * few states that come before it.
  *
- * Four states, in the order they can happen, and no fifth one invented:
- * reading, no answer, an empty database, or data. The count is the number of
- * distinct MMSIs with a stored position — the exact shape of
- * `/positions/latest` — not a "vessels in the region" claim the API does not
- * make; when the page comes back full it says "at least this many" rather
- * than letting the cap read as a total.
- *
- * From FASE 8 the data state is the world itself: `Globe` takes the stage and
- * this readout rides on it as context, deliberately smaller than the sphere —
- * KPIs and filters get their own place when FASE 11 arranges them.
+ * Three reading states, in the order they can happen: a first read pending,
+ * no answer, or the world itself. Once the API has answered, the world is
+ * always up — with zero vessels it is a correct answer about an empty
+ * database, not a reason to hide the geography the operator asked about. The
+ * selection, the search and the inspection panel are this component's state,
+ * because they exist only in relation to what is on stage.
  */
-export function DataStage({ health, rows, isPending, error }: DataStageProps) {
+export function DataStage({ health, rows, isPending, error, regions }: DataStageProps) {
+  const toggleRegions = useToggleRegions()
+  const [selectedMmsi, setSelectedMmsi] = useState<number | null>(null)
+  const [search, setSearch] = useState('')
+  const [focus, setFocus] = useState<GlobeFocus | null>(null)
+
+  // A vessel that left the fetched window is no longer inspectable; drop it
+  // rather than showing a panel for a ghost.
+  const all = rows ?? []
+  useEffect(() => {
+    if (selectedMmsi !== null && !all.some((row) => row.mmsi === selectedMmsi)) {
+      setSelectedMmsi(null)
+    }
+  }, [all, selectedMmsi])
+
   if (isPending) {
     return <div className="stage-note">Consultando <code>/positions/latest</code>…</div>
   }
@@ -54,25 +78,42 @@ export function DataStage({ health, rows, isPending, error }: DataStageProps) {
     )
   }
 
-  const count = rows?.length ?? 0
-  const fullPage = count >= POSITIONS_LIMIT
+  const query = search.trim()
+  const visible = query === '' ? all : all.filter((row) => matches(row, query))
+  const vessel = selectedMmsi !== null ? all.find((row) => row.mmsi === selectedMmsi) : undefined
 
-  if (count === 0) {
-    return (
-      <div className="stage-note">
-        <h2>Sin posiciones en la región</h2>
-        <p>La ingesta todavía no ha escrito ninguna ventana.</p>
-        <p className="muted">Último volcado {formatUtc(health?.last_flush)}</p>
-      </div>
-    )
-  }
+  const fullPage = all.length >= POSITIONS_LIMIT
+  const shownCount = query === '' ? all.length : visible.length
 
   return (
     <div className="world">
-      <Globe />
+      <Globe
+        regions={regions}
+        rows={visible}
+        selectedMmsi={selectedMmsi}
+        onSelectVessel={setSelectedMmsi}
+        focus={focus}
+      />
+      <RegionBar
+        regions={regions}
+        mutating={toggleRegions.isPending}
+        onToggle={(name, enabled) => toggleRegions.mutate([{ name, enabled }])}
+        onFocus={(next) => setFocus(next)}
+      />
+      <SearchBox value={search} onChange={setSearch} matches={visible.length} active={query !== ''} />
+      {vessel && <InspectPanel vessel={vessel} onClose={() => setSelectedMmsi(null)} />}
       <div className="readout readout--over-world">
-        <div className="readout-count">{formatCount(count)}</div>
-        <div className="readout-label">buques con posición almacenada</div>
+        <div className="readout-count">{formatCount(shownCount)}</div>
+        <div className="readout-label">
+          {query === ''
+            ? 'buques con posición almacenada'
+            : query !== '' && visible.length > 0
+              ? 'buques mostrados por la búsqueda'
+              : 'buques coincidentes'}
+        </div>
+        {all.length === 0 && (
+          <p className="muted">La ingesta todavía no ha escrito ninguna ventana.</p>
+        )}
         {fullPage && (
           <p className="muted">
             Tope de la consulta ({formatCount(POSITIONS_LIMIT)}): puede haber más buques con
