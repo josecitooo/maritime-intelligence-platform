@@ -42,6 +42,15 @@ class Position(BaseModel):
 
 
 class PositionLatest(Position):
-    """The newest position of one vessel, as the map keys it."""
+    """The newest position of one vessel, as the map keys it.
+
+    `ship_type` rides along from `vessels` rather than the position row:
+    identity and positions are deliberately unrelated tables
+    (`docs/architecture.md` §16), so the AIS type code is null whenever AIS
+    reported a position but no static data for that MMSI.
+    """
 
     mmsi: int
+    ship_type: int | None = Field(
+        description="AIS ship type code, joined from the identity table when it exists."
+    )

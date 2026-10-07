@@ -14,13 +14,14 @@ from sqlalchemy.dialects.postgresql import distinct_on
 
 from app.api.auth import require_read_key
 from app.db.session import session_scope
-from app.models import VesselPosition
+from app.models import Vessel, VesselPosition
 from app.schemas.positions import PositionLatest
 
 router = APIRouter(tags=["positions"], dependencies=[Depends(require_read_key)])
 
 #: Exactly the fields `PositionLatest` declares — a column rename shows up as a
 #: validation error here instead of silently dropping out of the response.
+#: `ship_type` is the join art of the payload, so it lives in `_COLUMNS` too.
 _COLUMNS = (
     VesselPosition.mmsi,
     VesselPosition.timestamp,
@@ -32,6 +33,7 @@ _COLUMNS = (
     VesselPosition.nav_status,
     VesselPosition.ship_name,
     VesselPosition.flags,
+    Vessel.ship_type,
 )
 
 
@@ -48,6 +50,10 @@ def latest_positions(limit: int = Query(default=2000, ge=1, le=10000)) -> list[P
     """
     newest_per_vessel = (
         select(*_COLUMNS)
+        # Identity is a bonus, not a guarantee (docs/data-model.md §2): a LEFT
+        # JOIN never drops a positioned vessel for lacking a `vessels` row,
+        # and the join cannot fan out because `mmsi` is `vessels`' primary key.
+        .join(Vessel, Vessel.mmsi == VesselPosition.mmsi, isouter=True)
         .order_by(VesselPosition.mmsi, VesselPosition.timestamp.desc())
         .ext(distinct_on(VesselPosition.mmsi))
         .subquery()

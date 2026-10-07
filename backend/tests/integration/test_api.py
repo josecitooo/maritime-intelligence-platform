@@ -42,7 +42,8 @@ _KEY = "integration-read-key"
 _WRITE_KEY = "integration-write-key"
 
 #: Exactly what `PositionLatest` declares: `rot` and `geom` are stored but
-#: never sent (`app/schemas/positions.py`).
+#: never sent (`app/schemas/positions.py`), and `ship_type` arrived with the
+#: filters (FASE 11).
 _POSITION_KEYS = {
     "mmsi",
     "timestamp",
@@ -54,6 +55,7 @@ _POSITION_KEYS = {
     "nav_status",
     "ship_name",
     "flags",
+    "ship_type",
 }
 
 
@@ -234,6 +236,23 @@ def test_the_position_payload_is_exactly_the_documented_contract(
     rows = client.get("/positions/latest").json()
 
     assert set(rows[0]) == _POSITION_KEYS
+
+
+def test_ship_type_rides_from_identity_and_null_without_it(
+    client: TestClient,
+) -> None:
+    """The type code comes from `vessels` if a static row exists, else null —
+    the same no-foreign-key rule the rest of the API honours."""
+    store(
+        identity(IDENTIFIED, name="SEA VOYAGER", updated_at=BASE),
+        position(IDENTIFIED, minute=0),
+        position(UNIDENTIFIED, minute=0),
+    )
+
+    by_mmsi = {row["mmsi"]: row for row in client.get("/positions/latest").json()}
+
+    assert by_mmsi[IDENTIFIED]["ship_type"] == 70
+    assert by_mmsi[UNIDENTIFIED]["ship_type"] is None
 
 
 # ── /vessels: the no-foreign-key rule, seen from the client ─────────────
