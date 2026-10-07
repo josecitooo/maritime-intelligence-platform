@@ -17,7 +17,7 @@ export interface HealthResponse {
   database: 'connected' | 'disconnected'
   version: string
   environment: string
-  /** The region this deployment watches, `[min_lat, min_lon, max_lat, max_lon]`. */
+  /** The region this deployment watches, `[min_lat, max_lat, min_lon, max_lon]`. */
   bbox: number[]
   ingestion_interval_minutes: number
   /** When the worker last committed a window; null before the first flush. */
