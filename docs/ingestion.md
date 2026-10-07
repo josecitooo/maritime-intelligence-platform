@@ -220,7 +220,7 @@ Data is never discarded for being incomplete.
 | **invalid** | latitude outside ±90, longitude outside ±180, MMSI not 9 digits | rejected, counted | `ingestion.pipeline`, at flush |
 | **missing** | field absent from the message (Class B reports no `NAVSTAT`) | stored as `NULL` | adapter, at decode |
 | **unknown** | the source explicitly reported "no value" | see below | adapter, at decode |
-| **anomalous** | SOG > 60 kn | **stored**, flagged | `ingestion.pipeline`, at flush |
+| **anomalous** | SOG > 60 kn; a displacement implying more than 60 kn in the time available | **stored**, flagged | `ingestion.pipeline`, at flush |
 
 **`unknown` splits on whether the sentinel fits the column.** Only
 `NAVSTAT = 15` ("not defined") is a real state code, so it is **stored as
@@ -240,7 +240,7 @@ that is stored **in full** — an implausible speed is still evidence that a
 vessel was somewhere, and hiding it would discard the very data showing the
 sensor was wrong.
 
-### Two entries the original design listed, and why neither is here
+### Two entries the original design listed
 
 **Rejected for falling outside the bounding box** — dropped. aisstream
 filters on the same coordinates the payload carries, so all 200 captured
@@ -249,12 +249,34 @@ that fired at the boundary would drop legitimate data for no gain. The
 subscription *is* the region filter, and it is configured by `MIN_LAT` …
 `MAX_LON` rather than re-checked downstream.
 
-**Position jump > 50 km between samples** — still open, and no longer
-blocked: `vessel_positions` exists now, and it is the authoritative previous
-position. An in-memory copy would reset on every restart, so the same anomalous
-flight would be flagged or missed depending on when the process was last
-redeployed; a flag that lies sometimes is worse than no flag. It needs a
-per-row `flags` column to record what it found — see `docs/data-model.md`.
+**Position jump > 50 km between samples** — implemented, but not as written.
+A fixed 50 km threshold is wrong in both directions: over a six-hour reporting
+gap it is 4.5 kn, ordinary traffic that sailed out of radio range, while a
+genuine 20 km teleport in ten minutes (65 kn) falls below it. The rule is
+**implied speed** — distance over gap, measured against
+`MAX_PLAUSIBLE_SOG_KNOTS`, the same physical limit the sog rule uses, so the
+pipeline holds one number instead of two that must be kept in step.
+
+Two details keep it honest:
+
+* **The anchor is the database, not memory.** The previous position comes from
+  `vessel_positions` (`load_previous_positions`), read once per flush before
+  the window is judged. An in-memory copy would reset on every restart, so the
+  same anomalous flight would be flagged or missed depending on when the
+  process was last redeployed — a flag that lies sometimes is worse than no
+  flag. Because the anchor and the window's first sample are both stored, a
+  vessel reporting three times in a window is checked three times, each against
+  its own predecessor.
+* **Pairs less than a minute apart are not judged.** Positions are throttled on
+  arrival, so a sub-minute pair is report-versus-arrival skew rather than a
+  voyage; dividing by it turns metre-scale position noise into a claim about
+  knots instead of a claim about the vessel.
+
+The verdict lands on the row (`vessel_positions.flags`) and rolls up into
+`ingestion_runs.flagged`. Its distance is the one measurement in the codebase
+that PostGIS does not do: a jump is often between a stored position and one
+still in memory, which no SQL can reach. `haversine_km` computes it, and an
+integration test pins it to `ST_Distance` so the two answers cannot drift.
 
 Rejected counts are aggregated by reason into `ingestion_runs.rejected` as
 JSONB, flags the same way in `ingestion_runs.flagged`; both also go to the
@@ -284,7 +306,7 @@ attempt rather than dropping it. Full detail in `docs/data-model.md` §3.
 | Socket closes mid-stream | logged with reason, reconnect and resubscribe within 3 s |
 | Malformed frame | counted as `decode_errors`, logged at DEBUG, does not abort the window |
 | Well-formed frame with nothing usable | counted as `unusable` and logged at DEBUG with its reason — a message type outside the decode set, an AIS type 24 part B with `Valid: false`, or a nameless part A. Not an error: the frame was readable, it simply had nothing for us |
-| Database unavailable at flush | window stays buffered and is retried, so the batch is never lost silently. **No `ingestion_runs` row is written**: the run row and the positions it counts share one transaction, and a failed flush must not leave a record claiming it happened. The failure is the gap in `window_end` plus the error log |
+| Database unavailable at flush (the anchor read or the write) | window stays buffered and is retried, so the batch is never lost silently. **No `ingestion_runs` row is written**: the run row and the positions it counts share one transaction, and a failed flush must not leave a record claiming it happened. The failure is the gap in `window_end` plus the error log |
 
 `/health` exposes `last_flush`, `last_ais_message` and `data_freshness_minutes`
 so a stalled pipeline is diagnosable from outside.

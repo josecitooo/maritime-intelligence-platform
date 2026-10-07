@@ -45,6 +45,7 @@ Primary key `(mmsi, timestamp)`.
 | `sog`, `cog` | float | knots / degrees; sentinels already `NULL` |
 | `heading`, `rot`, `nav_status` | smallint | sentinels already `NULL`; `nav_status = 15` is **kept** and surfaces as unknown |
 | `ship_name` | text | from the position message when the type carries one |
+| `flags` | text[] | not null, **no default** — `[]` when the row is believed, see §2 |
 | `geom` | geography(point, 4326) | **generated**, see §2 |
 
 ### `ingestion_runs`
@@ -137,13 +138,30 @@ It is `window_end - window_start`. Storing a subtraction duplicates data that
 can be read, and a trigger or check to keep the copy in step is the dead-code
 rule again.
 
-### No per-row `flags` column — yet
+### Per-row `flags`, with no `DEFAULT` on it
 
-Flags are aggregated into `ingestion_runs.flagged`. A row-level column earns
-its place when there is more than one flag and a query that filters on it;
-`position_jump` (`docs/ingestion.md` §5) is that moment. Adding it now to hold
-`sog_implausible` alone would be a column written by one statement and read by
-nobody.
+**Decision** — `vessel_positions.flags` is `text[] NOT NULL` with no default.
+An empty array means the row is believed; `sog_implausible` and
+`position_jump` record what was wrong but stored. The per-window roll-up in
+`ingestion_runs.flagged` is derived from these rows rather than counted a
+second time, so the two cannot disagree.
+
+**Reason** — a flag nobody can locate is half a flag. `flagged` says three
+positions in this window were not believed; the column says *which* three,
+which is what the track view will filter on. It arrived with `position_jump`
+(`docs/ingestion.md` §5) — the moment the earlier decision was waiting for.
+
+**Alternative** — keep the aggregate alone, as before.
+
+**Rejected** — that was the right call while `sog_implausible` was the only
+flag: a column written by one statement and read by nobody. With a second flag
+and a filter coming, it is read.
+
+**Also rejected** — a permanent `DEFAULT '{}'`. The migration borrows one for
+the `ADD COLUMN` so rows written before the rule can exist with no verdict,
+then drops it. A standing default would let an `INSERT` that forgot `flags`
+succeed silently with an empty array, and a column of verdicts is only
+trustworthy if omitting one fails.
 
 ### The transport counters are not columns either
 
@@ -159,7 +177,10 @@ health is diagnosable from outside.
 ## 3. How one window is written
 
 ```
-process_window(batch)         # pure: rejects and flags, touches nothing
+load_previous_positions(mmsis) # one read: where each vessel was last stored
+        │
+        ▼
+process_window(batch, previous)  # pure: rejects and flags, touches nothing
         │
         ▼
 persist_window(result, …)     # one transaction
@@ -173,7 +194,12 @@ buffer.clear()                # only after the write landed
 
 * **The write precedes the drain.** If it raises, the samples stay buffered and
   the next attempt retries the whole window — validation is pure, so the retry
-  reaches the same verdict.
+  reaches the same verdict. The anchor read happens again on that retry too, so
+  it cannot drift while a window waits.
+* **The anchor read is the only thing `process_window` cannot supply.** A
+  window holds what arrived since the last flush; `position_jump` is precisely
+  the claim that the two disagree, so it needs the row that came before. The
+  read runs in a thread for the same reason the write does.
 * **Replaying is a no-op.** `ON CONFLICT DO NOTHING` on the primary key means a
   replayed window or a crash between write and drain cannot double a track.
 * **The run row is *not* deduplicated.** Two flushes are two events; the second
@@ -205,7 +231,7 @@ field it **carried** replaces it.
 
 | Index | On | Serves |
 |---|---|---|
-| `vessel_positions_pkey` | `(mmsi, timestamp)` | point lookups and one vessel's track, already in time order |
+| `vessel_positions_pkey` | `(mmsi, timestamp)` | point lookups and one vessel's track, already in time order — which also makes `load_previous_positions`' `DISTINCT ON (mmsi)` a property of the index rather than a sort |
 | `ix_vessel_positions_timestamp` | `(timestamp)` | retention deletes and "everything in the last N minutes" across all vessels — which the PK cannot serve |
 | `idx_vessel_positions_geom` | `gist (geom)` | proximity, e.g. "vessels within 50 km of a port" (`architecture.md` §7) |
 

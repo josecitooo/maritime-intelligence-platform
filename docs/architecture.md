@@ -134,6 +134,14 @@ PostGIS expresses it once and correctly.
 point out of step with the row it describes; `persist_window` does not know
 PostGIS is there. See `docs/data-model.md` §2.
 
+**One exception, deliberately** — `position_jump` (`docs/ingestion.md` §5)
+measures the gap between a stored position and one still in memory, which no
+SQL can reach because the second row does not exist yet. `haversine_km` in
+`app.ingestion.pipeline` is that single measurement, and an integration test
+runs both it and `ST_Distance` over the same pairs so they cannot drift.
+"In every caller" is still false: there is one function, and it is proved
+against the database.
+
 ---
 
 ## 8. Retention and export ordering
