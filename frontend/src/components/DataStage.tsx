@@ -1,4 +1,4 @@
-import { ApiError, apiBaseUrl } from '../api/client'
+import { ApiError, apiBaseUrl, POSITIONS_LIMIT } from '../api/client'
 import type { HealthResponse, PositionLatest } from '../api/types'
 import { formatAgo, formatCount, formatUtc } from '../lib/format'
 
@@ -16,7 +16,9 @@ interface DataStageProps {
  * reading, no answer, an empty database, or data. The count is the number of
  * distinct MMSIs with a stored position — the exact shape of
  * `/positions/latest` — not a "vessels in the region" claim the API does not
- * make. FASE 8 replaces the body of this component with the 3D world.
+ * make; when the page comes back full it says "at least this many" rather
+ * than letting the cap read as a total. FASE 8 replaces the body of this
+ * component with the 3D world.
  */
 export function DataStage({ health, rows, isPending, error }: DataStageProps) {
   if (isPending) {
@@ -49,6 +51,7 @@ export function DataStage({ health, rows, isPending, error }: DataStageProps) {
   }
 
   const count = rows?.length ?? 0
+  const fullPage = count >= POSITIONS_LIMIT
 
   if (count === 0) {
     return (
@@ -64,6 +67,12 @@ export function DataStage({ health, rows, isPending, error }: DataStageProps) {
     <div className="readout">
       <div className="readout-count">{formatCount(count)}</div>
       <div className="readout-label">buques con posición almacenada</div>
+      {fullPage && (
+        <p className="muted">
+          Tope de la consulta ({formatCount(POSITIONS_LIMIT)}): puede haber más buques con
+          posición almacenada.
+        </p>
+      )}
       <dl className="readout-fields">
         <div>
           <dt>Último mensaje</dt>

@@ -50,11 +50,22 @@ export function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {
 }
 
 /**
+ * How many vessels one read asks for — and, once a response comes back full,
+ * the line below which the count stops being a total: `/positions/latest`
+ * answers with at most `limit` rows, so a full page means "this many or more".
+ * `DataStage` says so out loud instead of letting the cap read as a figure.
+ */
+export const POSITIONS_LIMIT = 2000
+
+/**
  * `GET /positions/latest`, newest position per vessel.
  *
  * `limit` bounds how many vessels the map can draw in one window; the API
  * clamps it to 10 000, far above anything the region produces.
  */
-export function fetchLatestPositions(limit = 2000, signal?: AbortSignal): Promise<PositionLatest[]> {
+export function fetchLatestPositions(
+  limit = POSITIONS_LIMIT,
+  signal?: AbortSignal,
+): Promise<PositionLatest[]> {
   return get<PositionLatest[]>(`/positions/latest?limit=${limit}`, signal)
 }
