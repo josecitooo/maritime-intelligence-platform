@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from functools import lru_cache
 from typing import Any
 
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
@@ -67,16 +67,6 @@ def session_scope() -> Iterator[Session]:
         raise
     finally:
         session.close()
-
-
-def ping_database() -> bool:
-    """Cheap connectivity probe used by the health endpoint."""
-    try:
-        with get_engine().connect() as connection:
-            connection.execute(text("SELECT 1"))
-    except Exception:
-        return False
-    return True
 
 
 def reset_engine() -> None:
