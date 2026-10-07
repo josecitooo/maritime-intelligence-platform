@@ -7,11 +7,13 @@ automatizada sobre la corriente AIS, un almacén operativo PostgreSQL/PostGIS,
 una capa REST con FastAPI y una visualización 3D en el navegador de buques,
 puertos y rutas.
 
-> **Estado: FASE 8 completa** — ingesta, validación, esquema PostGIS, retención
+> **Estado: FASE 9 completa** — ingesta, validación, esquema PostGIS, retención
 > de 7 días con archivo diario en Parquet (con subida opcional a OneDrive a
-> través de `rclone`), API REST de solo lectura y sala de control con el mundo
-> en 3D (Three.js) sobre datos AIS reales de `aisstream.io`. Ver
-> [hoja de ruta](#hoja-de-ruta).
+> través de `rclone`), API REST con lectura con clave y una única escritura
+> (`PUT /regions`), el mundo en 3D (Three.js) con la flota renderizada por rumbo
+> y velocidad sobre datos AIS reales de `aisstream.io`, región de cobertura
+> conmutable desde el navegador (catálogo mundial de doce regiones) y búsqueda e
+> inspección de buques. Ver [hoja de ruta](#hoja-de-ruta).
 
 ---
 
@@ -87,10 +89,11 @@ de reclamar tiempo real.
 
 ## API
 
-La API es de solo lectura y las respuestas llevan la frescura encima: además
-del estado, `/health` devuelve `last_flush` y `last_ais_message`, de modo que
-un cliente sabe qué tan viejo es lo que mira en lugar de fiarse de que la hora
-del reloj coincida con la última ingesta.
+Las lecturas son de solo lectura y las respuestas llevan la frescura encima:
+además del estado, `/health` devuelve `last_flush` y `last_ais_message`, de modo
+que un cliente sabe qué tan viejo es lo que mira en lugar de fiarse de que la
+hora del reloj coincida con la última ingesta. Una única escritura existe, la
+que gobierna qué regiones monitorea el flujo.
 
 | Método y ruta | Contenido |
 |---|---|
@@ -99,21 +102,25 @@ del reloj coincida con la última ingesta.
 | `GET /vessels` | Directorio de identidad estática, ordenado por recencia |
 | `GET /vessels/{mmsi}` | Identidad + última posición; 404 si ninguna tabla lo conoce |
 | `GET /vessels/{mmsi}/track` | Trayectoria de más antigua a más reciente (`[]` si no hay) |
+| `GET /regions` | Catálogo de regiones monitoreadas (abierto, como `/health`) |
+| `PUT /regions` | Activa/desactiva regiones del catálogo — exige `X-Write-Key` |
 
-Los tres endpoints que devuelven listas aceptan un `limit` acotado — 2000, 1000
-y 5000 por defecto según el recurso. El esquema OpenAPI completo se sirve en
+Los endpoints que devuelven listas aceptan un `limit` acotado — 2000, 1000 y
+5000 por defecto según el recurso. El esquema OpenAPI completo se sirve en
 `/docs`.
 
-**Clave de lectura** — si `API_READ_KEY` está definida, las rutas de datos
-exigen la cabecera `X-API-Key` y responden `401` sin ella; `/health` queda
-siempre accesible porque el healthcheck del contenedor no puede llevar un
-secreto. Sin clave configurada la API es abierta, que es el caso por defecto en
-desarrollo.
+**Claves** — si `API_READ_KEY` está definida, las rutas de datos exigen la
+cabecera `X-API-Key` y responden `401` sin ella; `/health` y `GET /regions`
+quedan siempre accesibles porque el healthcheck del contenedor no puede llevar
+un secreto y el navegador necesita el catálogo sin credencial. La escritura va
+al revés: sin `API_WRITE_KEY` el `PUT` responde `403` — las escrituras están
+*apagadas*, nunca abiertas. Sin clave configurada la API es abierta, que es el
+caso por defecto en desarrollo.
 
 Los datos son **near real-time**: la API los sirve cada ventana de ingesta
 («actualizado cada 30 minutos»), no en el instante en que el transpondedor
 emite. Las decisiones y sus alternativas están en
-[`docs/architecture.md`](docs/architecture.md) §11.
+[`docs/architecture.md`](docs/architecture.md) §11 y §13.
 
 ---
 
@@ -183,21 +190,28 @@ Plantilla completa en [`.env.example`](.env.example). Nunca se commitea `.env`.
 | Variable | Por defecto | Propósito |
 |---|---|---|
 | `AISSTREAM_API_KEY` | — | Credencial del flujo (obligatoria en producción) |
-| `MIN_LAT` / `MAX_LAT` / `MIN_LON` / `MAX_LON` | `8.0` / `31.0` / `-98.0` / `-59.0` | Caja delimitada Golfo + Caribe |
+| `MIN_LAT` / `MAX_LAT` / `MIN_LON` / `MAX_LON` | `8.0` / `31.0` / `-98.0` / `-59.0` | Caja legada Golfo + Caribe — siembra del catálogo `tracked_regions` |
+| `REGION_REFRESH_SECONDS` | `30` | Cadencia con que el worker relee la selección de regiones |
 | `DATABASE_URL` | Postgres local | Conexión directa a Supabase, `sslmode=require` |
 | `RETENTION_DAYS` | `7` | Ventana operativa antes de exportar + borrar |
 | `INGESTION_INTERVAL_MINUTES` | `30` | Cadencia del flush = «actualizado cada N minutos» |
 | `POSITION_INTERVAL_MINUTES` | `10` | Throttle por buque; controla el crecimiento de la tabla |
 | `MAINTENANCE_INTERVAL_MINUTES` | `1440` | Cada cuánto se escribe el archivo y se depuran filas viejas |
 | `RCLONE_REMOTE` | — | Habilita la subida a OneDrive |
+| `API_READ_KEY` | — | Clave de lectura opcional de las rutas de datos |
+| `API_WRITE_KEY` | — | Clave del único contrato de escritura; vacía = escrituras apagadas |
 
-Cambiar la caja delimitada cambia la región bajo análisis — sin tocar código.
+La región bajo análisis ya no vive solo en `.env`: el catálogo
+`tracked_regions` (doce regiones, sembrado por migración) es la fuente de
+verdad de la suscripción, y el selector web la cambia con `PUT /regions`. La
+caja legada queda como la siembra por defecto.
 
 El frontend tiene su propia plantilla en
 [`frontend/.env.example`](frontend/.env.example): `VITE_API_URL` (dirección de
-la API) y `VITE_API_KEY` (clave de lectura opcional). Se leen en el navegador,
-así que van incluidas en el bundle y **ninguna es un secreto**: la clave
-filtra clientes, no protege datos.
+la API), `VITE_API_KEY` (clave de lectura opcional) y `VITE_API_WRITE_KEY`
+(clave del selector de regiones). Se leen en el navegador, así que van
+incluidas en el bundle y **ninguna es un secreto**: la clave filtra clientes,
+no protege datos.
 
 ---
 
@@ -211,20 +225,20 @@ filtra clientes, no protege datos.
 │   │   ├── main.py              punto de entrada FastAPI
 │   │   ├── db/                  engine, session, declarative base
 │   │   ├── providers/base.py    protocolo AISProvider + dataclasses de muestra
-│   │   ├── models/               vessels · vessel_positions · ingestion_runs
+│   │   ├── models/               vessels · vessel_positions · ingestion_runs · tracked_regions
 │   │   ├── schemas/             contratos de respuesta (Pydantic)
-│   │   ├── api/routers/         health · positions · vessels
+│   │   ├── api/routers/         health · positions · vessels · regions
 │   │   ├── ingestion/           FASE 2-4
 │   │   ├── maintenance/         FASE 5
 │   │   └── metrics/             FASE 10-11
 │   ├── alembic/                 migraciones (URL inyectada desde app.config)
 │   ├── tests/                   unit + integración
 │   └── tools/probe_coverage.py  sonda de cobertura de la fuente
-├── frontend/                    FASE 8 · React + Vite + Three.js
+├── frontend/                    FASE 8-9 · React + Vite + Three.js
 │   ├── src/api/                 cliente y espejo de los contratos
-│   ├── src/components/          cabecera · mundo 3D · barra de estado
+│   ├── src/components/          cabecera · mundo 3D · selector de regiones · inspección
 │   ├── src/data/                costa Natural Earth 110m (dominio público)
-│   └── src/hooks/               sondeo de /health · detección de ventana
+│   └── src/hooks/               sondeo de /health · detección de ventana · regiones
 ├── docs/
 ├── docker-compose.yml           api (el worker se suma en FASE 2)
 ├── docker-compose.test.yml      PostGIS efímero para tests

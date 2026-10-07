@@ -126,6 +126,15 @@ ganancia para la demo que no lo compensa. El compromiso queda registrado en
 `app.config.bbox` y `.env.example` para que el siguiente lector vea el *por qué*,
 no solo el qué.
 
+**Actualmente la suscripción se gobierna desde `tracked_regions`** (FASE
+regiones): las cajas de `.env` son la *siembra* legada, y la migración crea el
+catálogo con el Caribe y el Golfo habilitados exactamente en esta caja medida —
+una base nueva sigue pidiendo lo que la sonda validó. El nombre de región que
+lleva esta fila en el catálogo es «Caribe y Golfo de México». El worker relee el
+conjunto habilitado cada `REGION_REFRESH_SECONDS` y reemplaza la suscripción en
+caliente; ampliar la cobertura con la tercera fila u otra cuenca ya no es editar
+`.env`, es activar una región del catálogo (`docs/architecture.md` §13).
+
 ### Resultado de la configuración final (600 s, Golfo + Caribe, 5 tipos)
 
 La puerta anterior usaba la caja estrecha original y cuatro tipos de mensaje. La

@@ -316,6 +316,68 @@ datos en un repositorio público.
 
 ---
 
+## 13. Selección de regiones (el contrato de escritura)
+
+**Decisión** — el conjunto de cajas que la suscripción pide no es ya un valor de
+`.env`: es una tabla, `tracked_regions`, sembrada por migración con un catálogo
+de doce regiones nombradas en español. El operador las enciende y apaga desde el
+mapa (`PUT /regions`); el worker relee el conjunto habilitado sobre
+`REGION_REFRESH_SECONDS` (30 s por defecto) y, si cambió, le pide al provider que
+reemplace la suscripción en caliente. aisstream admite varias cajas y reemplaza
+una suscripción sobre la conexión abierta a razón de una por segundo; un cambio
+de región nunca cuesta una reconexión y se ve en minutos.
+
+**Por qué una tabla** — la caja de `.env` es legado y una sola; el catálogo es
+una lista nombrada que el navegador necesitaba poder enseñar *antes* de pedir
+ningún cambio. Robusto y honesto: no se puede inventar una región desde el
+cliente, solo activar una del catálogo. Las doce cajas están calculadas sobre
+coordenadas reales de cuencas marítimas (no puntos inventados); el Caribe y el
+Golfo de México vienen habilitados exactamente con la caja medida de
+`docs/ingestion.md` §2, de modo que un despliegue nuevo se comporta como antes.
+
+**El contrato de escritura es simétrico con la lectura** — `GET /regions` es
+abierto, como `/health`: el catálogo es metadatos operativos, y el navegador los
+necesita sin credencial. `PUT /regions` exige en cambio una **segunda** clave,
+`API_WRITE_KEY` en `X-Write-Key`. Con `API_WRITE_KEY` vacía las escrituras están
+*apagadas* (403), no abiertas; que el demo no tenga clave no significa que
+cualquiera pueda redirigir la suscripción. La clave de escritura no es un
+secreto de servidor en el navegador (`VITE_API_WRITE_KEY`): viaja en el bundle,
+igual que `VITE_API_KEY`, y sirve para que un despliegue concreto decida exponer
+o no la palanca. Un nombre desconocido falla todo el PUT (404) para que una UI
+obsoleta no cancele en silencio una región que ya no conoce; dejar todas las
+regiones apagadas se rechaza (422) porque la suscripción necesita al menos una
+caja.
+
+**El reemplazo vive en el provider, no en el worker** — el worker es el que
+*compara* (tabla contra `provider.boxes`); el provider es quien *exige* el
+throttle de una sustitución por segundo y quien trata la confirmación de un
+reemplazo como un frame administrativo, no como dato inservible. Si un cambio
+llega mientras el socket está caído, la reconexión suscribe ya con las cajas
+nuevas: el pendiente se descarta en vez de emitirse dos veces. Un fallo de la
+lectura periódica se loguea y mantiene la selección anterior — nunca es fatal,
+a diferencia de una suscripción inicial rechazada.
+
+---
+
+## 14. La flota sobre el mundo (FASE 9)
+
+**Decisión** — los buques son un único `InstancedMesh` sobre el globo: cada
+casco es una caja alargada, orientada por su rumbo reportado (`heading`, con
+`cog` como respaldo) y colocada en su posición reportada, justo por encima de la
+costa. Un clic raytracea el instancia y abre el panel de inspección; el buscador
+filtra por nombre o MMSI el mismo conjunto que `/positions/latest` devolvió
+(filtrar en el cliente, no inventar un endpoint de búsqueda).
+
+**Honestidad del movimiento** — entre ventanas la flota *glissa* de la
+foto fija anterior a la nueva durante ~2 s. Eso es animación de datos, no
+extrapolación ni seguimiento en vivo: el panel de inspección lo dice y la barra
+de estado sigue diciendo «Actualizado cada N minutos». El globo se encuadra
+sobre el conjunto de regiones habilitadas y vuela a una región cuando la
+selección pide centrarla; el mundo entero es explorable con el arrastre porque
+la profundidad de la esfera oculta lo que no mira a cámara.
+
+---
+
 ## Puntos de extensión
 
 | Necesidad futura | Se conecta en |
@@ -324,3 +386,5 @@ datos en un repositorio público.
 | Lago de datos / AWS | `app/maintenance/export.py` ya produce Parquet |
 | Capa meteorológica | un provider nuevo + una capa de frontend; sin cambios en la ruta del buque |
 | Features de ML | tablas derivadas alimentadas desde `vessel_positions`, de solo lectura para la API |
+| Catálogo de regiones ampliable | la tabla `tracked_regions` ya es de solo lectura por la API; crear región = migración |
+| Más tipos de buque en el mapa | la capa de flota es un `InstancedMesh`; el tipo de geometría se decide en la PRIMERA textura que lo necesite |
