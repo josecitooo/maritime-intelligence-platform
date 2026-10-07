@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api.routers import health
+from app.api.routers import health, positions, vessels
 from app.config import get_settings
 from app.logging import setup_logging
 
@@ -56,4 +56,8 @@ app.add_middleware(
     allow_headers=["X-API-Key"],
 )
 
+# `/health` carries no read-key dependency: a liveness probe must work without
+# a secret (`app/api/auth.py`).
 app.include_router(health.router)
+app.include_router(positions.router)
+app.include_router(vessels.router)
