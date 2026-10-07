@@ -30,7 +30,13 @@ from app.db.base import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False` because alembic is often run *inside*
+    # another process — the test suite does, and any embedder would. With the
+    # default, `fileConfig` walks every logger this process already created
+    # and disables the ones alembic.ini does not name, which kills `app.*`
+    # for the rest of the run. Measured: `app.worker` goes from enabled to
+    # disabled by a single `alembic upgrade head`.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Escape literal `%` so URL-encoded passwords survive config interpolation.
 config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("%", "%%"))

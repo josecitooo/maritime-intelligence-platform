@@ -37,6 +37,9 @@ testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q --strict-markers"
 filterwarnings = ["error::DeprecationWarning:app.*"]
+markers = [
+    "integration: needs the test database (docker compose -f docker-compose.test.yml up -d --wait)",
+]
 
 [tool.ruff]
 line-length = 100
