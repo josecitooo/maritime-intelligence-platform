@@ -18,7 +18,7 @@ anchor to measure against.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
 
 from sqlalchemy import func, select
@@ -92,7 +92,7 @@ def persist_window(
     commit one without the other.
     """
     with session_scope() as session:
-        _insert_positions(session, result.positions)
+        _insert_positions(session, result.positions, result.row_flags)
         _upsert_vessels(session, result.statics)
         session.add(
             IngestionRun(
@@ -113,28 +113,42 @@ def persist_window(
 # ── positions ───────────────────────────────────────────────────────────
 
 
-def _insert_positions(session: Session, positions: Sequence[PositionSample]) -> None:
+def _insert_positions(
+    session: Session,
+    positions: Sequence[PositionSample],
+    row_flags: Mapping[tuple[int, datetime], frozenset[str]],
+) -> None:
     """Add the window's positions, ignoring any already stored.
 
     `ON CONFLICT DO NOTHING` over `(mmsi, timestamp)` is what makes a
     replayed window or a crash mid-flush harmless (`docs/ingestion.md` §6):
-    the batch is either written or written again, never doubled.
+    the batch is either written or written again, never doubled. Flags ride
+    the row for the same reason — a replay rewrites the identical verdict.
     """
     if not positions:
         return
     session.execute(
         pg_insert(VesselPosition)
-        .values([_position_row(sample) for sample in positions])
+        .values(
+            [
+                _position_row(
+                    sample,
+                    row_flags.get((sample.mmsi, sample.timestamp), frozenset()),
+                )
+                for sample in positions
+            ]
+        )
         .on_conflict_do_nothing(index_elements=["mmsi", "timestamp"])
     )
 
 
-def _position_row(sample: PositionSample) -> dict[str, object]:
+def _position_row(sample: PositionSample, flags: frozenset[str]) -> dict[str, object]:
     """Map a decoded position onto its columns.
 
     `geom` is absent because the database derives it from `latitude` and
     `longitude` — passing it here would be rejected by Postgres as a write to
-    a generated column.
+    a generated column. `flags` is sorted so a replayed window writes the
+    same bytes twice.
     """
     return {
         "mmsi": sample.mmsi,
@@ -149,6 +163,7 @@ def _position_row(sample: PositionSample) -> dict[str, object]:
         "ship_name": sample.ship_name,
         "source": sample.source,
         "received_at": sample.received_at,
+        "flags": sorted(flags),
     }
 
 

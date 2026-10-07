@@ -25,7 +25,7 @@ from alembic import command
 from app.db.session import session_scope
 from app.ingestion.buffer import WindowBatch
 from app.ingestion.persistence import load_previous_positions, persist_window
-from app.ingestion.pipeline import haversine_km, process_window
+from app.ingestion.pipeline import POSITION_JUMP, haversine_km, process_window
 from app.models import IngestionRun, Vessel, VesselPosition
 from app.providers.base import PositionSample, StaticSample
 from app.worker import IngestionWorker
@@ -311,6 +311,28 @@ async def test_a_flush_reaches_the_database_through_the_seam() -> None:
     assert (count_of(VesselPosition), count_of(Vessel), count_of(IngestionRun)) == (1, 1, 1)
     # The window drained: the next flush starts from nothing but the throttle.
     assert len(worker.buffer) == 0
+
+
+async def test_a_teleport_reaches_the_row_and_the_run_record() -> None:
+    """The whole path: two flushes, an anchor read between them, one flagged row."""
+    worker = IngestionWorker(_IdleProvider())
+    worker.buffer.add_position(position(minute=0))
+    await worker.flush_once(reason="scheduled")
+
+    # Two degrees east an hour later: ~211 km in one hour, 114 kn.
+    worker.buffer.add_position(position(minute=60, longitude=LONGITUDE + 2.0))
+    await worker.flush_once(reason="scheduled")
+
+    with session_scope() as session:
+        stored = session.execute(
+            select(VesselPosition).order_by(VesselPosition.timestamp)
+        ).scalars().all()
+        runs = session.execute(
+            select(IngestionRun).order_by(IngestionRun.id)
+        ).scalars().all()
+
+    assert [row.flags for row in stored] == [[], [POSITION_JUMP]]
+    assert [run.flagged for run in runs] == [{}, {POSITION_JUMP: 1}]
 
 
 def test_the_migration_has_not_drifted_from_the_models() -> None:

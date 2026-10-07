@@ -14,6 +14,7 @@ from datetime import datetime
 
 from geoalchemy2 import Geography
 from sqlalchemy import Computed, DateTime, Float, Index, Integer, SmallInteger, Text
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -67,6 +68,11 @@ class VesselPosition(Base):
 
     `(timestamp)` is indexed separately: retention deletes by message time
     across all vessels, which the primary key cannot serve.
+
+    `flags` is the row-level verdict — `sog_implausible`, `position_jump`, or
+    neither. The per-window roll-up lives in `ingestion_runs.flagged`; this
+    column is what lets a viewer ask *which* of the 3 000 positions in a
+    window nobody should believe.
     """
 
     __tablename__ = "vessel_positions"
@@ -83,6 +89,9 @@ class VesselPosition(Base):
     ship_name: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(Text, nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: Stored as a sorted list so a replayed window writes byte-identical
+    #: rows; read back as one. Written only by `app.ingestion.persistence`.
+    flags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False)
     geom: Mapped[object] = mapped_column(
         Geography("Point", srid=4326, spatial_index=True),
         # `persisted=True` is not cosmetic: without it SQLAlchemy renders no
