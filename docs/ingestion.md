@@ -307,6 +307,7 @@ attempt rather than dropping it. Full detail in `docs/data-model.md` §3.
 | Malformed frame | counted as `decode_errors`, logged at DEBUG, does not abort the window |
 | Well-formed frame with nothing usable | counted as `unusable` and logged at DEBUG with its reason — a message type outside the decode set, an AIS type 24 part B with `Valid: false`, or a nameless part A. Not an error: the frame was readable, it simply had nothing for us |
 | Database unavailable at flush (the anchor read or the write) | window stays buffered and is retried, so the batch is never lost silently. **No `ingestion_runs` row is written**: the run row and the positions it counts share one transaction, and a failed flush must not leave a record claiming it happened. The failure is the gap in `window_end` plus the error log |
+| Export or upload fails at a maintenance turn | logged, nothing deleted, no `export_runs` row, retried at the next turn — deliberately **without** the flush's backoff. A missed maintenance window costs nothing because the rows are still in the table, while hammering a permanent failure every few minutes would be noise rather than resilience (`architecture.md` §8) |
 
 `/health` exposes `last_flush`, `last_ais_message` and `data_freshness_minutes`
 so a stalled pipeline is diagnosable from outside.

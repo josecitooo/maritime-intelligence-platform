@@ -4,9 +4,10 @@ Near real-time maritime traffic intelligence built on live AIS data: an
 automated ingestion pipeline, a PostgreSQL/PostGIS operational store, a FastAPI
 REST layer, and a 3D browser visualisation of vessels, ports and routes.
 
-> **Status: FASE 4 complete** — ingestion, validation and the PostGIS schema,
-> running against live AIS data. Source data is `aisstream.io`. See
-> [Roadmap](#roadmap).
+> **Status: FASE 5 complete** — ingestion, validation, the PostGIS schema, and
+> 7-day retention with a daily Parquet archive (optionally pushed to OneDrive
+> through `rclone`), running against live AIS data. Source data is
+> `aisstream.io`. See [Roadmap](#roadmap).
 
 ---
 
@@ -194,7 +195,7 @@ frames from the live stream**, not invented data.
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Decisions, alternatives, why |
 | [`docs/data-model.md`](docs/data-model.md) | Tables, keys, merge rules, and what is deliberately not stored |
-| `docs/ingestion.md` | FASE 2 |
+| `docs/ingestion.md` | Sources, coverage, buffer and flush, validation, errors |
 | `docs/congestion.md` | FASE 10 |
 | `docs/deployment.md` | FASE 13 |
 

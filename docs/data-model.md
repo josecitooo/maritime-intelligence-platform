@@ -9,15 +9,16 @@ up -d --wait`.
 
 ---
 
-## 1. What FASE 4 ships
+## 1. The tables
 
 | Table | One row per | Growth |
 |---|---|---|
 | `vessels` | MMSI that has reported static data | ≈ distinct vessels in the bounding box |
 | `vessel_positions` | MMSI × message time | ≈ vessels × 144/day (`POSITION_INTERVAL_MINUTES` = 10) |
 | `ingestion_runs` | closed flush | 48/day, empty windows included |
+| `export_runs` | archived period | 1/day at `MAINTENANCE_INTERVAL_MINUTES` = 1440 |
 
-`export_runs` arrives with FASE 5; `ports` and `port_activity` with FASE 10.
+`ports` and `port_activity` arrive with FASE 10.
 
 ### `vessels`
 
@@ -59,6 +60,22 @@ Primary key `(mmsi, timestamp)`.
 | `positions`, `statics`, `vessels` | int | what was written |
 | `throttled`, `evicted` | int | the buffer's counters for the same window |
 | `rejected`, `flagged` | jsonb | `reason -> count` (`docs/ingestion.md` §5) |
+
+### `export_runs`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int, PK | |
+| `started_at`, `finished_at` | timestamptz | written only when the export succeeded, so the pair never brackets a failure |
+| `period_start` | timestamptz | `MIN(timestamp)` of what was exported — where the archive begins |
+| `period_end` | timestamptz | the cutoff in force, `now - RETENTION_DAYS`; everything below it went |
+| `row_count` | int | rows in the file, and the count the `DELETE` had to match |
+| `file` | text | file name relative to `EXPORT_DIR`; the Parquet is the archive of record. A CSV, when `EXPORT_CSV` is on, shares the file's stem and needs no column of its own |
+| `byte_size` | bigint | size of that Parquet file, so a truncated upload is visible without opening it |
+
+The table is a handful of rows a year, so it carries no index beyond its
+primary key and no foreign key to `vessel_positions` — that would be pointing
+at rows the whole purpose of the table is to remove.
 
 ---
 
@@ -131,6 +148,43 @@ plus an error in the log.
 first, and it invites the lie the design is built to avoid: a row saying
 `failed` for a window whose positions did land, or `success` for one committed
 without them. "The count and the counted commit together" cannot be wrong.
+
+### No `status` column on `export_runs`
+
+**Decision** — the ledger row and the `DELETE` it authorises are written in one
+transaction, so there is no column recording how an export went.
+
+**Reason** — an export that fails leaves neither: no row claiming success, no
+rows removed, nothing half-done to repair. The row is written only after the
+file exists and has been read back, which makes `export_runs` a statement about
+a period that *was* archived rather than an attempt log. `architecture.md` §8
+has the ordering and the rowcount guard that enforce it.
+
+**Alternative** — record `status = 'failed'` for exports that did not make it.
+
+**Rejected** — recording a failure needs a second transaction to report on the
+fate of the first, and the question anyone actually asks ("are these rows still
+in the table?") is answered by looking for them. An enum that can drift from
+reality is worse than a gap in the data.
+
+### The archive carries `vessel_positions` minus `geom`, declared once
+
+**Decision** — the Parquet and CSV schemas omit `geom`, and are declared as one
+explicit Arrow schema in `app/maintenance/export.py` from which both the
+`SELECT` and the CSV header are derived.
+
+**Reason** — `geom` is generated from `latitude` and `longitude` (§2), so the
+archive already holds everything needed to rebuild it, and a copied value is a
+chance for the two to disagree. Deriving the column list from a single
+declaration means a column cannot be added to the `SELECT` and forgotten in the
+file, or the reverse.
+
+**Alternative** — let pyarrow infer the schema from the first batch of rows.
+
+**Rejected** — an all-`NULL` column infers as type `null`, and the next day's
+file, where the same column has values, would infer something else. Two archives
+of the same table that will not concatenate is a data-quality bug waiting for a
+quiet day.
 
 ### No `gap_seconds` column
 
@@ -225,6 +279,37 @@ to the current voyage, and freezing them at first sighting would turn `vessels`
 into a museum. So a field the message **omitted** keeps the stored value, a
 field it **carried** replaces it.
 
+### How one export is written
+
+```
+SELECT … WHERE timestamp < cutoff        # the period, in track order
+        │
+        ▼
+write Parquet (+ CSV when EXPORT_CSV)    # into EXPORT_DIR
+        │
+        ▼
+read it back and count the rows          # a file that cannot be read is not an archive
+        │
+        ▼
+DELETE … WHERE timestamp < cutoff        # rowcount must equal that count, else ↓
+INSERT export_runs                       #   rollback: rows stay, the file is removed
+        │
+        ▼
+rclone copy EXPORT_DIR <remote>          # only when RCLONE_REMOTE is set
+```
+
+* **The file precedes the delete and is removed if the delete does not happen**
+  (`architecture.md` §8).
+* **The file name is the period** —
+  `vessel_positions_<period_start>_<period_end>.parquet`, in UTC, with colons
+  replaced by hyphens because a name containing `:` is unusable on Windows.
+* **`vessels` and `ingestion_runs` are never pruned.** Only `vessel_positions`
+  grows without bound, and a `vessels` row is the thing the positions are about.
+* **`export_runs` enumerates the archive; the directory does not.** A file no
+  row names is a leftover from a run killed before it could commit: its rows are
+  still in the table and the next run archives them again, so that file is the
+  duplicate rather than the newer one.
+
 ---
 
 ## 4. Indexes
@@ -243,14 +328,16 @@ field it **carried** replaces it.
 docker compose -f docker-compose.test.yml up -d --wait
 cd backend
 alembic upgrade head           # or let the fixture do it
-pytest -m integration          # the ten tests that need PostGIS
+pytest -m integration          # the tests that need PostGIS
 ```
 
 They assert the things a unit test cannot: every `PositionSample` field
 surviving the round trip, the derived point landing within a metre of the stored
 coordinates, a replay collapsing instead of doubling, an omitted field failing
-to erase a stored one, a half-known hull sum storing `NULL`, and the migration
-having not drifted from the models.
+to erase a stored one, a half-known hull sum storing `NULL`, the migration
+having not drifted from the models, and — against retention — that the period
+archived is the period pruned, that a failed export removes nothing, and that
+what was written still reads.
 
 **Nothing skips when the database is missing.** CI provisions the same
 container, and a suite that quietly passes without it has quietly stopped

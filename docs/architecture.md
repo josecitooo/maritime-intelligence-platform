@@ -14,8 +14,8 @@ AIS stream ─► worker (asyncio) ─► validate ► transform ► dedup ► p
                     ┌────────────────┴───────────────┐
                     ▼                                ▼
               FastAPI (REST)                  daily maintenance
-                    │                          export ► upload
-                    ▼                          verify ► delete
+                    │                          export ► verify ► delete
+                    ▼                          then upload via rclone
               React + Three.js
 ```
 
@@ -146,16 +146,57 @@ against the database.
 
 ## 8. Retention and export ordering
 
-**Decision** — export first, *verify* the export succeeded, *then* delete.
+**Decision** — export first, *read the file back*, and only then delete, with
+the ledger row and the `DELETE` in one transaction.
 
 **Alternative** — the obvious `DELETE … WHERE timestamp < NOW() - INTERVAL '7 days'`.
 
 **Rejected on its own** — that statement alone destroys data that was never
-archived. Deletion is guarded by a successful `export_runs` row for the period.
+archived.
 
-Deletes run in chunks so a large purge does not hold locks against reads.
+**How the guard is actually built** — `app/maintenance/export.py` selects the
+period, writes `EXPORT_DIR/vessel_positions_<start>_<end>.parquet`, reopens it
+and counts its rows, and only then runs the `DELETE` and inserts the
+`export_runs` row for that period. The `DELETE`'s rowcount has to equal the
+number of rows in the file, or everything rolls back and the file is removed.
+
+That comparison is the guard, rather than a query looking for a covering
+`export_runs` row before deleting: such a query proves a fact that held at some
+earlier instant, whereas sharing a transaction makes the ledger entry and the
+deletion the same event. A flush committing an old-timestamped position between
+the read and the delete shows up as a mismatch and aborts, instead of becoming
+a row nobody archived. A lock held across the file write would buy the same
+guarantee at the cost of putting ingestion at the mercy of disk latency.
+
+**Consequence** — a failed export leaves neither a ledger row nor a deletion,
+so the period is retried next turn and there is no partial state to repair.
+`docs/data-model.md` §2 records why there is consequently no `status` column.
+
+**One case to know about** — a hard kill between the file write and the commit
+leaves a file no `export_runs` row mentions. Fails safe: its rows are still in
+the table, the next run archives them again, and the duplicate is visible
+because the ledger — not the directory listing — enumerates what was archived.
+A graceful `docker stop` does not reach this state; cancellation rolls the
+transaction back and removes the file.
+
+Deletes run as **one statement, not in chunks**. Chunking only releases locks if
+the chunks commit separately, and separate commits are what the guard forbids:
+a failure after the first chunk would leave a period half-deleted with no ledger
+row. Within one transaction the locks are held to the end either way, so
+chunking would add a pagination loop and buy nothing. The volume is bounded by
+§4 — a day of throttled traffic, order 10⁵ rows, against the index on
+`timestamp` — and that is the figure to re-measure before changing it.
+
 Partitioning is deliberately **not** used: 7 days of throttled `Gulf +
 Caribbean` data does not justify it. Revisit above roughly 10 M rows.
+
+**The upload is optional and never faked.** When `RCLONE_REMOTE` is set the
+worker runs `rclone copy EXPORT_DIR <remote>` after every maintenance turn;
+`rclone` compares size and modification time, so the same call retries an
+earlier failure. When it is not set the archive stays on disk and no log says
+otherwise — the failure this feature exists to prevent is rows deleted, a
+ledger row reading "archived", and the only copy on a disk about to be
+rebuilt. A missing `rclone` binary raises rather than being skipped.
 
 ---
 

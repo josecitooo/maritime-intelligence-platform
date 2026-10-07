@@ -16,6 +16,13 @@ timestamp < cutoff` must match the number of rows written, or the whole
 transaction rolls back and the file is removed. That is what makes a
 concurrent flush safe — a position committed between the read and the delete
 appears as a mismatch, which aborts, instead of as a row nobody archived.
+
+A hard kill between the file write and the commit leaves a file no `export_runs`
+row mentions. That is the safe direction to fail: its rows are still in the
+table and the next run archives them again, so the rule for anything reading
+`EXPORT_DIR` is that the ledger — not the directory listing — enumerates the
+archives. A graceful shutdown never reaches that window: the work runs in a
+thread, and the threads are joined before the process exits.
 """
 
 from __future__ import annotations
@@ -133,9 +140,9 @@ def export_and_prune(settings: Settings | None = None) -> ExportOutcome | None:
                 )
             )
     except BaseException:
-        # A cancelled or failed run must not leave a file claiming rows the
-        # database still holds; the next run would archive them again and the
-        # archive would carry them twice.
+        # Anything that stops this run before the commit must not leave a file
+        # claiming rows the database still holds: the next run would archive
+        # them again and the archive would carry them twice.
         for path in written:
             path.unlink(missing_ok=True)
         raise
