@@ -192,7 +192,7 @@ frame ─► decode ─► throttle(mmsi, POSITION_INTERVAL_MINUTES) ─► buff
   más antiguo con una advertencia registrada en vez de agotar la memoria.
 * Los datos estáticos se bufferizan aparte y se hacen *upsert* en `vessels`.
 
-### Ejecución en vivo, antes de que existiera la persistencia (2026-10-06, 150 s)
+### Ejecución real, antes de que existiera la persistencia (2026-10-06, 150 s)
 
 | | |
 |---|---|
@@ -288,7 +288,7 @@ divergir.
 
 Los recuentos de rechazo se agregan por motivo en `ingestion_runs.rejected` como
 JSONB, y las marcas igual en `ingestion_runs.flagged`; ambos van también al log
-estructurado al cerrar cada ventana. En la ejecución en vivo de §4 ambos estaban
+estructurado al cerrar cada ventana. En la ejecución real de §4 ambos estaban
 vacíos.
 
 ---
@@ -335,7 +335,7 @@ cadencia del volcado. Por eso el producto dice:
 
 ---
 
-## 9. Referencia de campos (verificada contra tráfico en vivo)
+## 9. Referencia de campos (verificada contra tráfico real)
 
 Todo lo que sigue se leyó de frames reales en `.captures/`, no de la
 documentación. Los nombres difieren de los de AISHub, así que el mapeo aguas

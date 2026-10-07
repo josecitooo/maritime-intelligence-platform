@@ -1,15 +1,17 @@
 # Maritime Intelligence Platform
 
-Inteligencia de tráfico marítimo en tiempo casi real construida sobre datos AIS
-en vivo: una tubería de ingesta automatizada, un almacén operativo
-PostgreSQL/PostGIS, una capa REST con FastAPI y una visualización 3D en el
-navegador de buques, puertos y rutas.
+[![CI](https://github.com/josecitooo/maritime-intelligence-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/josecitooo/maritime-intelligence-platform/actions/workflows/ci.yml)
+
+Inteligencia de tráfico marítimo en tiempo casi real: una tubería de ingesta
+automatizada sobre la corriente AIS, un almacén operativo PostgreSQL/PostGIS,
+una capa REST con FastAPI y una visualización 3D en el navegador de buques,
+puertos y rutas.
 
 > **Estado: FASE 7 completa** — ingesta, validación, esquema PostGIS, retención
 > de 7 días con archivo diario en Parquet (con subida opcional a OneDrive a
 > través de `rclone`), API REST de solo lectura y base del cliente React
-> (sala de control), funcionando contra datos AIS en vivo. Fuente de datos:
-> `aisstream.io`. Ver [hoja de ruta](#hoja-de-ruta).
+> (sala de control), funcionando con datos AIS de `aisstream.io`. Ver
+> [hoja de ruta](#hoja-de-ruta).
 
 ---
 
@@ -23,7 +25,7 @@ correctos y convertidos en métricas. Los paneles existentes muestran
 
 ## Objetivos
 
-1. Consumir AIS en vivo de forma automática — sin `python ingest.py` a mano.
+1. Consumir la corriente AIS de forma automática — sin `python ingest.py` a mano.
 2. Validar y clasificar cada registro antes de almacenarlo.
 3. Mantener 7 días de datos operativos en Supabase, archivando lo anterior como
    Parquet.
@@ -246,7 +248,7 @@ npm run build             # tsc + vite build
 Los tests son reales: validación de configuración, invariantes de la caja
 delimitada, redacción de logs y — contra un contenedor PostGIS vivo — la ruta
 de escritura (`tests/integration/`). Las fixtures de la tubería de ingesta son
-**frames grabados del flujo en vivo**, no datos inventados.
+**frames grabados del flujo de `aisstream.io`**, no datos inventados.
 
 El cliente se verifica hoy con `typecheck` y `build`; sus tests unitarios
 llegan en FASE 12.
