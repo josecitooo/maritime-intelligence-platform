@@ -297,6 +297,25 @@ nulo significa exactamente «nunca reportó datos estáticos», no un hueco.
 
 ---
 
+## 12. Presentación del mundo (FASE 8)
+
+**Decisión** — el mundo se dibuja con Three.js: una esfera de mar y la costa de
+Natural Earth 1:110m como segmentos de línea, encuadrada sobre la caja
+consultada. La costa se versiona en `src/data/` (dominio público, sin atribución
+obligatoria), así el build nunca depende de la red.
+
+**Alternativa** — rellenar los polígonos de tierra (triangulación sobre la
+esfera) o estampar una textura equirectangular.
+
+**Rechazada** — rellenar exige triangulación geográfica que V1 no tiene razón de
+cargar, y una textura es un mapa proyectado que hay que generar y mantener; la
+línea sin relleno es lo que dibuja una sala de control, y la profundidad de la
+esfera oculta lo que no mira a cámara. También se descartó OpenStreetMap como
+fuente de costa: la licencia ODbL impone atribución y *share-alike* sobre los
+datos en un repositorio público.
+
+---
+
 ## Puntos de extensión
 
 | Necesidad futura | Se conecta en |

@@ -7,10 +7,10 @@ automatizada sobre la corriente AIS, un almacén operativo PostgreSQL/PostGIS,
 una capa REST con FastAPI y una visualización 3D en el navegador de buques,
 puertos y rutas.
 
-> **Estado: FASE 7 completa** — ingesta, validación, esquema PostGIS, retención
+> **Estado: FASE 8 completa** — ingesta, validación, esquema PostGIS, retención
 > de 7 días con archivo diario en Parquet (con subida opcional a OneDrive a
-> través de `rclone`), API REST de solo lectura y base del cliente React
-> (sala de control), funcionando con datos AIS de `aisstream.io`. Ver
+> través de `rclone`), API REST de solo lectura y sala de control con el mundo
+> en 3D (Three.js) sobre datos AIS reales de `aisstream.io`. Ver
 > [hoja de ruta](#hoja-de-ruta).
 
 ---
@@ -220,10 +220,11 @@ filtra clientes, no protege datos.
 │   ├── alembic/                 migraciones (URL inyectada desde app.config)
 │   ├── tests/                   unit + integración
 │   └── tools/probe_coverage.py  sonda de cobertura de la fuente
-├── frontend/                    FASE 7 · React + Vite
+├── frontend/                    FASE 8 · React + Vite + Three.js
 │   ├── src/api/                 cliente y espejo de los contratos
-│   ├── src/hooks/               sondeo de /health · detección de ventana
-│   └── src/components/          cabecera · escenario · barra de estado
+│   ├── src/components/          cabecera · mundo 3D · barra de estado
+│   ├── src/data/                costa Natural Earth 110m (dominio público)
+│   └── src/hooks/               sondeo de /health · detección de ventana
 ├── docs/
 ├── docker-compose.yml           api (el worker se suma en FASE 2)
 ├── docker-compose.test.yml      PostGIS efímero para tests
