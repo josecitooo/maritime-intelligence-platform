@@ -236,9 +236,10 @@ no protege datos.
 │   └── tools/probe_coverage.py  sonda de cobertura de la fuente
 ├── frontend/                    FASE 8-9 · React + Vite + Three.js
 │   ├── src/api/                 cliente y espejo de los contratos
-│   ├── src/components/          cabecera · mundo 3D · selector de regiones · inspección
+│   ├── src/components/          cabecera · mundo 3D · selector de regiones · inspección · puertos · filtros · KPIs
 │   ├── src/data/                costa Natural Earth 110m (dominio público)
-│   └── src/hooks/               sondeo de /health · detección de ventana · regiones
+│   ├── src/hooks/               sondeo de /health · detección de ventana · regiones · puertos · rastros
+│   └── src/lib/                 formateo, filtros (testeados)
 ├── docs/
 ├── docker-compose.yml           api (el worker se suma en FASE 2)
 ├── docker-compose.test.yml      PostGIS efímero para tests
@@ -265,8 +266,7 @@ delimitada, redacción de logs y — contra un contenedor PostGIS vivo — la ru
 de escritura (`tests/integration/`). Las fixtures de la tubería de ingesta son
 **frames grabados del flujo de `aisstream.io`**, no datos inventados.
 
-El cliente se verifica hoy con `typecheck` y `build`; sus tests unitarios
-llegan en FASE 12.
+El cliente se verifica hoy con `typecheck`, `build` y `npm test` (vitest).
 
 ---
 
@@ -277,8 +277,8 @@ llegan en FASE 12.
 | [`docs/architecture.md`](docs/architecture.md) | Decisiones, alternativas, por qué |
 | [`docs/data-model.md`](docs/data-model.md) | Tablas, claves, reglas de fusión y lo que deliberadamente no se guarda |
 | `docs/ingestion.md` | Fuentes, cobertura, buffer y flush, validación, errores |
-| `docs/congestion.md` | FASE 10 |
-| `docs/deployment.md` | FASE 13 |
+| `docs/congestion.md` | Congestión portuaria derivada (FASE 10) |
+| `docs/deployment.md` | Despliegue y operación (FASE 13) |
 
 > Los documentos están **en español**; los identificadores, comentarios y
 > mensajes de commit del código, en inglés, que es el estándar del sector.
