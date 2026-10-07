@@ -10,7 +10,7 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
 
 from alembic import context
 
@@ -46,9 +46,11 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations against a live connection."""
-    connectable = engine_from_config(
+    # `engine_from_config` expects a dict of `sqlalchemy.*` keys, not the URL
+    # itself: handed a string it iterates the characters, matches no prefixed
+    # key, and dies on `options.pop("url")`. The URL is already in hand.
+    connectable = create_engine(
         config.get_main_option("sqlalchemy.url"),
-        prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
 
