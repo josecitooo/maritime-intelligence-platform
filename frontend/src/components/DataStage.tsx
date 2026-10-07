@@ -1,6 +1,7 @@
 import { ApiError, apiBaseUrl, POSITIONS_LIMIT } from '../api/client'
 import type { HealthResponse, PositionLatest } from '../api/types'
 import { formatAgo, formatCount, formatUtc } from '../lib/format'
+import { Globe } from './Globe'
 
 interface DataStageProps {
   health: HealthResponse | undefined
@@ -17,8 +18,11 @@ interface DataStageProps {
  * distinct MMSIs with a stored position — the exact shape of
  * `/positions/latest` — not a "vessels in the region" claim the API does not
  * make; when the page comes back full it says "at least this many" rather
- * than letting the cap read as a total. FASE 8 replaces the body of this
- * component with the 3D world.
+ * than letting the cap read as a total.
+ *
+ * From FASE 8 the data state is the world itself: `Globe` takes the stage and
+ * this readout rides on it as context, deliberately smaller than the sphere —
+ * KPIs and filters get their own place when FASE 11 arranges them.
  */
 export function DataStage({ health, rows, isPending, error }: DataStageProps) {
   if (isPending) {
@@ -64,25 +68,28 @@ export function DataStage({ health, rows, isPending, error }: DataStageProps) {
   }
 
   return (
-    <div className="readout">
-      <div className="readout-count">{formatCount(count)}</div>
-      <div className="readout-label">buques con posición almacenada</div>
-      {fullPage && (
-        <p className="muted">
-          Tope de la consulta ({formatCount(POSITIONS_LIMIT)}): puede haber más buques con
-          posición almacenada.
-        </p>
-      )}
-      <dl className="readout-fields">
-        <div>
-          <dt>Último mensaje</dt>
-          <dd>{formatAgo(health?.data_freshness_minutes)}</dd>
-        </div>
-        <div>
-          <dt>Último volcado</dt>
-          <dd>{formatUtc(health?.last_flush)}</dd>
-        </div>
-      </dl>
+    <div className="world">
+      <Globe />
+      <div className="readout readout--over-world">
+        <div className="readout-count">{formatCount(count)}</div>
+        <div className="readout-label">buques con posición almacenada</div>
+        {fullPage && (
+          <p className="muted">
+            Tope de la consulta ({formatCount(POSITIONS_LIMIT)}): puede haber más buques con
+            posición almacenada.
+          </p>
+        )}
+        <dl className="readout-fields">
+          <div>
+            <dt>Último mensaje</dt>
+            <dd>{formatAgo(health?.data_freshness_minutes)}</dd>
+          </div>
+          <div>
+            <dt>Último volcado</dt>
+            <dd>{formatUtc(health?.last_flush)}</dd>
+          </div>
+        </dl>
+      </div>
     </div>
   )
 }

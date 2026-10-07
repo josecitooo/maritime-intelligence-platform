@@ -203,6 +203,49 @@ body {
   font-size: 15px;
 }
 
+/* ── The world (FASE 8) ─────────────────────────────────────────────── */
+
+/* `.stage` centres its items, so the world claims the whole grid area
+   instead of hugging its own content. */
+.world {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.globe {
+  position: absolute;
+  inset: 0;
+}
+
+.globe canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The readout rides on the world rather than replacing it. Pointer events
+   pass through so the sphere stays draggable underneath, and the figure is
+   smaller than in FASE 7: the world is the headline now. */
+.readout--over-world {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  text-align: center;
+  pointer-events: none;
+  text-shadow: 0 1px 10px rgba(10, 13, 17, 0.95);
+}
+
+.readout--over-world .readout-count {
+  font-size: 46px;
+}
+
+.readout--over-world .readout-fields {
+  margin-top: 14px;
+  gap: 40px;
+}
+
 /* ── Status bar ──────────────────────────────────────────────────────── */
 
 .status-bar {
