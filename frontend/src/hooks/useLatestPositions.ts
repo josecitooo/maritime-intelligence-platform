@@ -16,7 +16,7 @@
 
 import { useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchLatestPositions } from '../api/client'
+import { ApiError, fetchLatestPositions } from '../api/client'
 import type { HealthQuery } from './useHealth'
 
 const POSITIONS_KEY = ['positions', 'latest'] as const
@@ -51,7 +51,13 @@ export function useSyncPositions(health: HealthQuery): void {
     if (health.isPending) return
 
     const flush = health.data?.last_flush ?? null
-    const positionsFailed = queryClient.getQueryState(POSITIONS_KEY)?.status === 'error'
+    const state = queryClient.getQueryState(POSITIONS_KEY)
+    // A 4xx is a definitive answer from a server that is there: re-asking
+    // every poll would loop on a configuration problem only a human can fix
+    // (a rotated key, a missing `VITE_API_KEY`). Transport failures and 5xx
+    // are worth another attempt once `/health` is answering again.
+    const refused = state?.error instanceof ApiError && state.error.status < 500
+    const positionsFailed = state?.status === 'error' && !refused
     const newWindow =
       flush !== null && previousFlush.current !== null && flush !== previousFlush.current
 

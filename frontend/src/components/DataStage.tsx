@@ -1,4 +1,4 @@
-import { apiBaseUrl } from '../api/client'
+import { ApiError, apiBaseUrl } from '../api/client'
 import type { HealthResponse, PositionLatest } from '../api/types'
 import { formatAgo, formatCount, formatUtc } from '../lib/format'
 
@@ -24,6 +24,21 @@ export function DataStage({ health, rows, isPending, error }: DataStageProps) {
   }
 
   if (error) {
+    // 401/403 is not a broken connection: the server answered, and it is
+    // asking for a key the client did not send. Saying "SIN CONEXION" here
+    // would blame the network for a configuration problem.
+    if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+      return (
+        <div className="stage-note stage-note--error">
+          <h2>La API exige una clave de lectura</h2>
+          <p className="stage-url">{apiBaseUrl}</p>
+          <p>
+            Añade <code>VITE_API_KEY</code> a <code>frontend/.env</code> y reinicia el servidor de
+            desarrollo.
+          </p>
+        </div>
+      )
+    }
     return (
       <div className="stage-note stage-note--error">
         <h2>Sin respuesta de la API</h2>
