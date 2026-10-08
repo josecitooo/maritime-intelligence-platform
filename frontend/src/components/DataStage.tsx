@@ -14,8 +14,10 @@ import { SearchBox } from './SearchBox'
 import { useToggleRegions } from '../hooks/useRegions'
 import { usePortDetail } from '../hooks/usePorts'
 import { useSyncTrack, useVesselTrack } from '../hooks/useTrack'
+import type { HealthQuery } from '../hooks/useHealth'
 
 interface DataStageProps {
+  healthQuery: HealthQuery
   health: HealthResponse | undefined
   rows: PositionLatest[] | undefined
   isPending: boolean
@@ -36,7 +38,7 @@ interface DataStageProps {
  * selection, the search, the filters, the track and the port panel are this
  * component's state, because they exist only in relation to what is on stage.
  */
-export function DataStage({ health, rows, isPending, error, regions, ports }: DataStageProps) {
+export function DataStage({ healthQuery, health, rows, isPending, error, regions, ports }: DataStageProps) {
   const toggleRegions = useToggleRegions()
   const [selectedMmsi, setSelectedMmsi] = useState<number | null>(null)
   const [selectedPortId, setSelectedPortId] = useState<number | null>(null)
@@ -79,7 +81,7 @@ export function DataStage({ health, rows, isPending, error, regions, ports }: Da
   // Data queries stay mounted in every reading state; they just stay dormant.
   const portDetail = usePortDetail(selectedPortId)
   const track = useVesselTrack(selectedMmsi, showTrack)
-  useSyncTrack(health as any, showTrack ? selectedMmsi : null)
+  useSyncTrack(healthQuery, showTrack ? selectedMmsi : null)
 
   if (isPending) {
     return <div className="stage-note">Consultando <code>/positions/latest</code>…</div>

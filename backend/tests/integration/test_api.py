@@ -358,10 +358,10 @@ def test_an_mmsi_with_nothing_stored_has_an_empty_track(client: TestClient) -> N
 # flags and always flip them back, so the next test meets a pristine catalog.
 
 
-def test_the_catalog_is_seeded_with_only_the_default_region_enabled(
+def test_the_catalog_is_seeded_with_every_region_enabled(
     client: TestClient,
 ) -> None:
-    """Twelve named regions; the seed enables exactly the legacy bbox."""
+    """Twelve named regions; the seed enables the complete world catalog."""
     rows = client.get("/regions").json()
 
     assert len(rows) == 12
@@ -373,7 +373,7 @@ def test_the_catalog_is_seeded_with_only_the_default_region_enabled(
         -98.0,
         -59.0,
     )
-    assert all(row["enabled"] is False for row in rows if row is not caribe)
+    assert all(row["enabled"] is True for row in rows)
 
 
 def test_regions_write_flips_the_selection_and_persists(
@@ -402,12 +402,12 @@ def test_regions_write_flips_the_selection_and_persists(
         persisted = {row["name"]: row["enabled"] for row in client.get("/regions").json()}
         assert persisted["Estrecho de Malaca y Sudeste Asiático"] is True
     finally:
+        rows = client.get("/regions").json()
         client.put(
             "/regions",
             json={
                 "regions": [
-                    {"name": "Caribe y Golfo de México", "enabled": True},
-                    {"name": "Estrecho de Malaca y Sudeste Asiático", "enabled": False},
+                    {"name": row["name"], "enabled": True} for row in rows
                 ]
             },
             headers={"X-Write-Key": _WRITE_KEY},
@@ -443,6 +443,22 @@ def test_regions_write_rejects_disabling_every_region(
     monkeypatch.setenv("API_WRITE_KEY", _WRITE_KEY)
     get_settings.cache_clear()
     try:
+        other_regions = [
+            row["name"]
+            for row in client.get("/regions").json()
+            if row["name"] != "Caribe y Golfo de México"
+        ]
+        response = client.put(
+            "/regions",
+            json={
+                "regions": [
+                    {"name": name, "enabled": False} for name in other_regions
+                ]
+            },
+            headers={"X-Write-Key": _WRITE_KEY},
+        )
+        assert response.status_code == 200
+
         response = client.put(
             "/regions",
             json={"regions": [{"name": "Caribe y Golfo de México", "enabled": False}]},

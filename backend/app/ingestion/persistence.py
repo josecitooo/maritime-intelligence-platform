@@ -46,6 +46,11 @@ _MERGEABLE = (
     "source",
 )
 
+# PostgreSQL caps one prepared statement at 65,535 bind parameters. A
+# position row currently uses 13 columns, so 4,000 rows leave headroom for
+# driver and SQLAlchemy details while keeping the whole window transactional.
+_POSITION_INSERT_CHUNK_SIZE = 4_000
+
 
 def load_previous_positions(mmsis: Collection[int]) -> dict[int, PreviousPosition]:
     """The last *stored* position of each vessel, as of before this window.
@@ -127,19 +132,19 @@ def _insert_positions(
     """
     if not positions:
         return
-    session.execute(
-        pg_insert(VesselPosition)
-        .values(
-            [
-                _position_row(
-                    sample,
-                    row_flags.get((sample.mmsi, sample.timestamp), frozenset()),
-                )
-                for sample in positions
-            ]
+    rows = [
+        _position_row(
+            sample,
+            row_flags.get((sample.mmsi, sample.timestamp), frozenset()),
         )
-        .on_conflict_do_nothing(index_elements=["mmsi", "timestamp"])
-    )
+        for sample in positions
+    ]
+    for start in range(0, len(rows), _POSITION_INSERT_CHUNK_SIZE):
+        session.execute(
+            pg_insert(VesselPosition)
+            .values(rows[start : start + _POSITION_INSERT_CHUNK_SIZE])
+            .on_conflict_do_nothing(index_elements=["mmsi", "timestamp"])
+        )
 
 
 def _position_row(sample: PositionSample, flags: frozenset[str]) -> dict[str, object]:

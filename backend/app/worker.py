@@ -252,7 +252,7 @@ class IngestionWorker:
         never fatal, unlike a rejected *initial* subscription.
         """
         while True:
-            try:
+            try: 
                 await self._refresh_regions()
             except Exception:
                 log.exception("region refresh failed; holding the previous selection")

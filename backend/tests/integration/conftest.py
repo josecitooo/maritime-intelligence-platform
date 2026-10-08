@@ -44,6 +44,8 @@ def empty_tables(migrated: None) -> Iterator[None]:
     """Give every test the whole database to itself."""
     with session_scope() as session:
         session.execute(text(_TRUNCATE))
+        session.execute(text("UPDATE tracked_regions SET enabled = TRUE"))
     yield
     with session_scope() as session:
         session.execute(text(_TRUNCATE))
+        session.execute(text("UPDATE tracked_regions SET enabled = TRUE"))

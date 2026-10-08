@@ -38,13 +38,13 @@ _COLUMNS = (
 
 
 @router.get("/positions/latest", response_model=list[PositionLatest])
-def latest_positions(limit: int = Query(default=2000, ge=1, le=10000)) -> list[PositionLatest]:
+def latest_positions(limit: int = Query(default=10000, ge=1, le=10000)) -> list[PositionLatest]:
     """The newest stored position of each vessel, freshest first.
 
     `limit` bounds the payload rather than the vessel count: the map wants the
-    traffic that is moving now, so when a region holds more vessels than fit in
-    one response, the ones last seen longest ago fall off the end. It is
-    refetched only when `/health` reports a new `last_flush`
+    traffic that is moving now, so when a region holds more than 10,000 vessels,
+    the ones last seen longest ago fall off the end. It is refetched only when
+    `/health` reports a new `last_flush`
     (`docs/architecture.md` §9), so this runs once per ingestion interval and
     not once per browser poll.
     """

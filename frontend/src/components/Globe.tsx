@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import coastline from '../data/ne_110m_coastline.json'
 import type { PortCongestionSummary, PositionLatest, Region, TrackPoint } from '../api/types'
+import { hasMotionReport, isWaiting } from '../lib/filters'
 
 /**
  * FASE 8 + 9 + 10 + 12: the world (sphere + Natural Earth coastlines), the
@@ -13,11 +14,12 @@ import type { PortCongestionSummary, PositionLatest, Region, TrackPoint } from '
  * the selector asks it to. The ocean sphere hides the far side, so the whole
  * world is browseable just by dragging.
  *
- * The fleet is one `InstancedMesh` (one draw call for up to 2000 hulls); the
- * ports are a second one, each marker coloured by its congestion reading and
- * scaled up when selected. Clicking resolves against both meshes at once: a
- * marker opens the port panel, a hull opens the inspection panel, empty space
- * clears. A vessel's stored track draws as a polyline just above the coast.
+ * The fleet is one `InstancedMesh` of flat, heading-aligned arrows (one draw
+ * call for up to 2000 vessels); the ports are a second one, each marker
+ * coloured by its congestion reading and scaled up when selected. Clicking
+ * resolves against both meshes at once: a marker opens the port panel, an
+ * arrow opens the inspection panel, empty space clears. A vessel's stored
+ * track draws as a polyline just above the coast.
  *
  * Between data windows the fleet glides from the previous snapshot to the new
  * one — a short visual ease, not an extrapolation, and never a claim of live
@@ -58,8 +60,11 @@ export interface GlobeProps {
 
 const OCEAN = 0x0e1620
 const COAST = 0x4fa3b0
-const SHIP = 0x9fd4dc
-const SHIP_SELECTED = 0xffd27a
+// Bright, compact arrow tones keep the fleet legible without hiding coastlines.
+const SHIP_MOVING = 0x49c7f5
+const SHIP_WAITING = 0xf08059
+const SHIP_UNKNOWN = 0xd7e2e8
+const SHIP_SELECTED = 0xffd166
 
 // Port marker scale — not a traffic-light metaphor, a congestion thermometer:
 // nothing stored, nobody waiting, a few, or a real queue.
@@ -69,12 +74,8 @@ const PORT_BUSY = 0xc9963c
 const PORT_CONGESTED = 0xc25b52
 const PORT_SELECTED = 0xffd27a
 
-const TRACK = 0x4fa3b0
+const TRACK = 0x7fc9ff
 
-// Shared `Color` instances: `InstancedMesh.setColorAt` takes a `Color`, and
-// the colour pass must not allocate one per hull.
-const SHIP_COLOR = new THREE.Color(SHIP)
-const SHIP_SELECTED_COLOR = new THREE.Color(SHIP_SELECTED)
 const PORT_COLORS: Record<number, THREE.Color> = {
   [PORT_IDLE]: new THREE.Color(PORT_IDLE),
   [PORT_OK]: new THREE.Color(PORT_OK),
@@ -85,12 +86,12 @@ const PORT_COLORS: Record<number, THREE.Color> = {
 
 const RADIUS = 1
 const COAST_RADIUS = RADIUS * 1.003
-const TRACK_RADIUS = RADIUS * 1.004
-const PORT_RADIUS = RADIUS * 1.0045
-const SHIP_RADIUS = RADIUS * 1.006
+const TRACK_RADIUS = RADIUS * 1.0045
+const PORT_RADIUS = RADIUS * 1.0048
+const SHIP_RADIUS = RADIUS * 1.0075
 
 /** How many hulls the instanced mesh is allocated for — the API's own cap. */
-const MAX_SHIPS = 2000
+const MAX_SHIPS = 10000
 /** The seeded catalog is 59 ports (Natural Earth 1:10m); 64 leaves headroom. */
 const MAX_PORTS = 64
 
@@ -116,7 +117,7 @@ const clamp = (value: number, low: number, high: number): number =>
  */
 function fitDistance(latSpanDeg: number, lonSpanDeg: number): number {
   const area = Math.max(1, latSpanDeg * lonSpanDeg)
-  return clamp(2.15 - Math.log10(area) * 0.42, 1.55, WORLD_DISTANCE)
+  return clamp(1.55 + Math.log10(area) * 0.42, 1.55, WORLD_DISTANCE)
 }
 
 function enabledExtent(regions: Region[]): { lon: number; lat: number; distance: number } | null {
@@ -155,6 +156,61 @@ function buildCoastline(): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
   return geometry
+}
+
+type LandRing = {
+  coordinates: number[][]
+  minLon: number
+  maxLon: number
+  minLat: number
+  maxLat: number
+}
+
+const LAND_RINGS: LandRing[] = coastline.features.flatMap((feature) => {
+  const coordinates = feature.geometry.coordinates
+  if (coordinates.length < 3) return []
+  const first = coordinates[0]
+  const last = coordinates[coordinates.length - 1]
+  if (first[0] !== last[0] || first[1] !== last[1]) return []
+  const longitudes = coordinates.map(([longitude]) => longitude)
+  const latitudes = coordinates.map(([, latitude]) => latitude)
+  return [
+    {
+      coordinates,
+      minLon: Math.min(...longitudes),
+      maxLon: Math.max(...longitudes),
+      minLat: Math.min(...latitudes),
+      maxLat: Math.max(...latitudes),
+    },
+  ]
+})
+
+/** True when an AIS fix falls inside one of the closed Natural Earth land rings. */
+function isLand(longitude: number, latitude: number): boolean {
+  for (const ring of LAND_RINGS) {
+    if (
+      latitude < ring.minLat ||
+      latitude > ring.maxLat ||
+      longitude < ring.minLon ||
+      longitude > ring.maxLon
+    ) {
+      continue
+    }
+    let inside = false
+    for (let index = 0, previous = ring.coordinates.length - 1; index < ring.coordinates.length; previous = index++) {
+      const [currentLon, currentLat] = ring.coordinates[index]
+      const [previousLon, previousLat] = ring.coordinates[previous]
+      const crosses =
+        currentLat > latitude !== previousLat > latitude &&
+        longitude <
+          ((previousLon - currentLon) * (latitude - currentLat)) /
+            (previousLat - currentLat) +
+            currentLon
+      if (crosses) inside = !inside
+    }
+    if (inside) return true
+  }
+  return false
 }
 
 /** The marker tone for a reading: the congestion thermometer above. */
@@ -277,12 +333,29 @@ export function Globe({
     trackLine.frustumCulled = false
     scene.add(trackLine)
 
-    const hullGeometry = new THREE.BoxGeometry(0.02, 0.0045, 0.034)
-    const hullMaterial = new THREE.MeshLambertMaterial({ color: SHIP })
-    const vessels = new THREE.InstancedMesh(hullGeometry, hullMaterial, MAX_SHIPS)
-    vessels.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-    vessels.count = 0
-    scene.add(vessels)
+    // A thin triangle lies in the local x/z plane; setVesselMatrix maps +z
+    // to the AIS heading and local y to the globe normal.
+    const arrowGeometry = new THREE.BufferGeometry()
+    arrowGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(
+        [0, 0, 0.009, -0.0035, 0, -0.0055, 0.0035, 0, -0.0055],
+        3,
+      ),
+    )
+    arrowGeometry.setIndex([0, 1, 2])
+    arrowGeometry.computeVertexNormals()
+    const vesselLayers = [SHIP_MOVING, SHIP_WAITING, SHIP_UNKNOWN, SHIP_SELECTED].map((color) => {
+      const mesh = new THREE.InstancedMesh(
+        arrowGeometry,
+        new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }),
+        MAX_SHIPS,
+      )
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+      mesh.count = 0
+      scene.add(mesh)
+      return { mesh, indices: [] as number[] }
+    })
 
     // ── The port layer: one marker per reading. ──
     const portGeometry = new THREE.OctahedronGeometry(0.008)
@@ -292,8 +365,8 @@ export function Globe({
     portMarkers.count = 0
     scene.add(portMarkers)
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.65))
-    const sun = new THREE.DirectionalLight(0xffffff, 1.3)
+    scene.add(new THREE.AmbientLight(0xffffff, 0.75))
+    const sun = new THREE.DirectionalLight(0xffffff, 1.5)
     sun.position.set(30, 20, -25)
     scene.add(sun)
 
@@ -338,8 +411,8 @@ export function Globe({
       animStart: 0,
       animating: false,
     }
-    let snapshot = rowsRef.current
-    let colorDirty = true
+    let snapshot: PositionLatest[] | null = null
+    let waterIndices: number[] = []
 
     const setSnapshot = () => {
       const next = rowsRef.current
@@ -358,27 +431,23 @@ export function Globe({
       )
       ships.animStart = performance.now()
       ships.animating = ships.prev.size > 0 && ships.curr.size > 0
+      waterIndices = next.reduce<number[]>((indices, row, index) => {
+        if (!isLand(row.longitude, row.latitude)) indices.push(index)
+        return indices
+      }, [])
       snapshot = next
-      colorDirty = true
     }
-
-    const applyColors = () => {
-      const current = rowsRef.current
-      const selected = selectedRef.current
-      for (let i = 0; i < Math.min(current.length, MAX_SHIPS); i++) {
-        vessels.setColorAt(i, current[i].mmsi === selected ? SHIP_SELECTED_COLOR : SHIP_COLOR)
-      }
-      if (vessels.instanceColor) vessels.instanceColor.needsUpdate = true
-      colorDirty = false
-    }
+    
 
     const matrix = new THREE.Matrix4()
     const renderShips = () => {
       const current = rowsRef.current
-      const count = Math.min(current.length, MAX_SHIPS)
-      vessels.count = count
+      const count = Math.min(waterIndices.length, MAX_SHIPS)
+      for (const layer of vesselLayers) {
+        layer.indices.length = 0
+        layer.mesh.count = 0
+      }
       if (count === 0) return
-      if (colorDirty) applyColors()
 
       let t = 1
       if (ships.animating) {
@@ -388,7 +457,8 @@ export function Globe({
       }
       const selected = selectedRef.current
       for (let i = 0; i < count; i++) {
-        const row = current[i]
+        const sourceIndex = waterIndices[i]
+        const row = current[sourceIndex]
         let latitude = row.latitude
         let longitude = row.longitude
         if (t < 1) {
@@ -399,10 +469,16 @@ export function Globe({
           }
         }
         const heading = row.heading ?? row.cog ?? 0
-        setVesselMatrix(matrix, longitude, latitude, heading, row.mmsi === selected ? 1.7 : 1)
-        vessels.setMatrixAt(i, matrix)
+        const layerIndex = row.mmsi === selected ? 3 : isWaiting(row) ? 1 : hasMotionReport(row) ? 0 : 2
+        const layer = vesselLayers[layerIndex]
+        const instanceIndex = layer.indices.length
+        layer.indices.push(sourceIndex)
+        const scale = row.mmsi === selected ? 1.6 : 1.15
+        setVesselMatrix(matrix, longitude, latitude, heading, scale)
+        layer.mesh.setMatrixAt(instanceIndex, matrix)
+        layer.mesh.count = instanceIndex + 1
       }
-      vessels.instanceMatrix.needsUpdate = true
+      for (const layer of vesselLayers) layer.mesh.instanceMatrix.needsUpdate = true
     }
 
     // ── The port layer: rebuilt only when readings or selection change. ──
@@ -482,7 +558,10 @@ export function Globe({
       raycaster.setFromCamera(pointer, camera)
       // Nearest hit wins across both meshes: a marker opens the port panel,
       // a hull the inspection panel, empty space clears everything.
-      const hit = raycaster.intersectObjects([portMarkers, vessels], false)[0]
+      const hit = raycaster.intersectObjects(
+        [portMarkers, ...vesselLayers.map((layer) => layer.mesh)],
+        false,
+      )[0]
       if (!hit) {
         onSelectVesselRef.current(null)
         onSelectPortRef.current(null)
@@ -495,9 +574,9 @@ export function Globe({
         return
       }
       onSelectPortRef.current(null)
-      onSelectVesselRef.current(
-        hit.instanceId !== undefined ? rowsRef.current[hit.instanceId]?.mmsi ?? null : null,
-      )
+      const layer = vesselLayers.find(({ mesh }) => mesh === hit.object)
+      const rowIndex = layer && hit.instanceId !== undefined ? layer.indices[hit.instanceId] : undefined
+      onSelectVesselRef.current(rowIndex !== undefined ? rowsRef.current[rowIndex]?.mmsi ?? null : null)
     }
     renderer.domElement.addEventListener('pointerdown', onPointerDown)
     renderer.domElement.addEventListener('pointerup', onPointerUp)
@@ -538,11 +617,13 @@ export function Globe({
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
       controls.dispose()
-      vessels.dispose()
+      for (const { mesh } of vesselLayers) {
+        mesh.dispose()
+        ;(mesh.material as THREE.Material).dispose()
+      }
       portMarkers.dispose()
       trackLine.dispose()
-      hullGeometry.dispose()
-      hullMaterial.dispose()
+      arrowGeometry.dispose()
       portGeometry.dispose()
       portMaterial.dispose()
       trackGeometry.dispose()

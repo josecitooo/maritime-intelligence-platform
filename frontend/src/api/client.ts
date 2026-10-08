@@ -86,12 +86,11 @@ export function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {
 }
 
 /**
- * How many vessels one read asks for — and, once a response comes back full,
- * the line below which the count stops being a total: `/positions/latest`
- * answers with at most `limit` rows, so a full page means "this many or more".
- * `DataStage` says so out loud instead of letting the cap read as a figure.
+ * The largest payload `/positions/latest` serves by default. The API keeps a
+ * ceiling so a global view cannot accidentally allocate an unbounded browser
+ * payload while still including the complete supported fleet window.
  */
-export const POSITIONS_LIMIT = 2000
+export const POSITIONS_LIMIT = 10000
 
 /**
  * `GET /positions/latest`, newest position per vessel.

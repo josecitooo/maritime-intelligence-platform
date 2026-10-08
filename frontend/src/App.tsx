@@ -28,6 +28,7 @@ export function App() {
       <Header apiState={resolveApiState(health)} regions={regions.data} />
       <main className="stage">
         <DataStage
+          healthQuery={health}
           health={health.data}
           rows={positions.data}
           isPending={positions.isPending}
